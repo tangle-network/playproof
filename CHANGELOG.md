@@ -2,6 +2,18 @@
 
 All notable changes to Playproof are documented here.
 
+## 0.3.0
+
+### Game and platform adapters
+
+- `adapters/gymnasium`: one worker turns any registered Gymnasium environment with a `Discrete` action space into a Playproof game — classic control, toy text, procedurally generated suites, text environments, and third-party environments that register the same way.
+- Action words come from `get_action_meanings()` when the environment exposes it and are positional otherwise. A discrete space has no idle action, so `NOOP` and every unknown word leave the environment untouched instead of advancing it.
+- Evidence is the environment's own cumulative reward, step count, termination flags, and numeric `info` entries, joined by the observation hash and a bounded projection of the observation. Reward and numeric `info` entries are scaled by 1000 into integers.
+- The evidence limit is stated in the adapter and the docs rather than papered over: a generic environment offers no privileged channel the agent cannot author, so the tier is reward-derived, and verification rests on replay recomputation alone.
+- Determinism is measured across separate worker processes, not assumed. `CartPole-v1` and `FrozenLake-v1` with `is_slippery: false` reproduce exactly under `reset(seed)`.
+- Gymnasium has no generic state API, so a checkpoint replays from its seed, and additionally writes back the environment's own state attribute where one is readable. No `pickle` is involved.
+- Milestone contracts are derived from committed reference playthroughs on `CartPole-v1` and `FrozenLake-v1`, both of which ship inside Gymnasium, so the adapter gate needs no asset on a clean CI machine.
+
 ## 0.2.0
 
 ### Campaigns

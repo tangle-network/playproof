@@ -22,6 +22,7 @@ const productionPrefixes = [
   'desktop/',
   'drivers/',
   'exploration/',
+  'gym/',
   'native/',
   'platforms/',
   'pyboy/',
