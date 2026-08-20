@@ -20,6 +20,14 @@ All notable changes to Playproof are documented here.
 - Gymnasium has no generic state API, so a checkpoint replays from its seed, and additionally writes back the environment's own state attribute where one is readable. No `pickle` is involved.
 - Milestone contracts are derived from committed reference playthroughs on `CartPole-v1` and `FrozenLake-v1`, both of which ship inside Gymnasium, so the adapter gate needs no asset on a clean CI machine.
 
+### Fixes
+
+- `scriptedDriver` is positioned by the harness turn instead of its own call count, so a driver created in a fresh process resumes a campaign mid-script instead of restarting it.
+
+### Continuous integration
+
+- Every workflow job runs on the organization's self-hosted Linux pool with a per-job `uv` virtual environment and a per-job pnpm install directory; the real-emulator gates (Libbet on PyBoy, Airstriker on stable-retro, Breakout on ALE, CartPole and FrozenLake on Gymnasium) all run there.
+
 ## 0.2.0
 
 ### Campaigns
