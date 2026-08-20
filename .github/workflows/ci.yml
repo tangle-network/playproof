@@ -83,7 +83,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Install PyBoy
-        run: "$UV" pip install --python "$PLAYPROOF_PYTHON" pyboy==2.6.0
+        run: |
+          "$UV" pip install --python "$PLAYPROOF_PYTHON" pyboy==2.6.0
       - name: Download the pinned ROM and verify its identity
         run: |
           curl --silent --show-error --location --fail --retry 3 \
