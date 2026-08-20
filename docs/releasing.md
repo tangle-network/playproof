@@ -34,7 +34,7 @@ pnpm ci
 - exact npm archive inspection; and
 - clean-consumer imports of every public subpath.
 
-The real PyBoy/Tetris job is also required and must not take a skip path.
+The real PyBoy/Tetris regression (`PLAYPROOF_ROM=... pnpm test:pyboy` followed by `pnpm exec tsx calibrate.mts`) runs locally with a legally obtained ROM that matches `pyboy/reference-tetris.json`; CI cannot obtain that ROM, so the release manager runs it before tagging.
 
 ## Cut a release
 
