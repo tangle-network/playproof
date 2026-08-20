@@ -129,9 +129,9 @@ jobs:
       - name: Create immutable GitHub release
         run: |
           package=$(find "$RUNNER_TEMP/playproof-package" -maxdepth 1 -type f -name '*.tgz' -print -quit)
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+          if gh release view "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "$RELEASE_TAG release already exists"
           else
-            gh release create "$RELEASE_TAG" "$package" "$RUNNER_TEMP/playproof-package/SHA256SUMS" \
+            gh release create "$RELEASE_TAG" "$package" "$RUNNER_TEMP/playproof-package/SHA256SUMS" -R "$GITHUB_REPOSITORY" \
               --verify-tag --generate-notes --title "Playproof $EXPECTED_VERSION"
           fi

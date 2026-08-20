@@ -68,7 +68,7 @@ jobs:
             pnpm install --no-frozen-lockfile
           fi
           python -m pip install --disable-pip-version-check pyboy==2.6.0
-          python -c 'import pyboy; print(pyboy.__version__)'
+          python -c 'import importlib.metadata as m; print(m.version("pyboy"))'
       - name: Build pinned RGBDS
         run: |
           sudo apt-get update
