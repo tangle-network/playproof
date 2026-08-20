@@ -12,7 +12,11 @@ Protocol methods:
   shutdown   {}
 
 Determinism: PyBoy is headless with sound off and fixed input timing. Every
-checkpoint and final input script remains replayable from power-on.
+checkpoint and final input script remains replayable from power-on. The
+emulator always stops with save=False, because PyBoy writes cartridge RAM to
+'<rom>.ram' and loads that file at the next power-on: a battery save would
+make each boot start from a different state, and a truncated one aborts the
+boot. Playproof keeps state in save-states, never in a cartridge save.
 """
 import base64
 import hashlib
@@ -58,9 +62,15 @@ class Worker:
 
     def _start(self):
         if self.pyboy is not None:
-            self.pyboy.stop()
+            self.pyboy.stop(save=False)
             self.pyboy = None
         from pyboy import PyBoy
+        battery = self.rom + '.ram'
+        if os.path.exists(battery):
+            raise RuntimeError(
+                f'cartridge save file {battery} exists. PyBoy loads it at power-on, '
+                'so the run would not start from the pinned power-on state. '
+                'Move or delete the file.')
         self.pyboy = PyBoy(self.rom, window='null', sound=False, cgb=False)
         self.frame = 0
         self.gen += 1
@@ -170,11 +180,14 @@ def serve(transport):
             elif method == 'restore':
                 result = worker.restore(params['state'])
             elif method == 'shutdown':
-                result = {'bye': True}
-                fout.write(json.dumps({'id': req.get('id'), 'ok': True, 'result': result}) + '\n')
-                fout.flush()
+                # Stop the emulator BEFORE the reply. The client kills this
+                # process as soon as the reply arrives, so teardown that runs
+                # after the reply can be interrupted part way.
                 if worker.pyboy is not None:
-                    worker.pyboy.stop()
+                    worker.pyboy.stop(save=False)
+                    worker.pyboy = None
+                fout.write(json.dumps({'id': req.get('id'), 'ok': True, 'result': {'bye': True}}) + '\n')
+                fout.flush()
                 return
             else:
                 raise ValueError(f'unknown method {method}')
