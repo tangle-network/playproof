@@ -78,6 +78,7 @@ export function createCliAgentDriver(options: CliAgentDriverOptions): AgentDrive
           seed: context.seed,
           spentUsd: context.spentUsd,
           remainingBudgetUsd: context.remainingBudgetUsd,
+          ...(context.guidance === undefined ? {} : { guidance: context.guidance }),
         },
       }
       const rawArgs = typeof options.args === 'function' ? options.args(request) : (options.args ?? [])
@@ -147,11 +148,13 @@ export function renderCliAgentPrompt(
   const vocabulary = commands && commands.length > 0
     ? `Valid inputs: ${commands.join(', ')}.\n`
     : ''
+  const guidance = request.context.guidance
   return [
     'You are controlling a game for an agent evaluation.',
     vocabulary.trimEnd(),
     `Decision ${request.context.turn} of ${request.context.maxTurns}.`,
     `Remaining measured budget: $${request.context.remainingBudgetUsd.toFixed(6)}.`,
+    guidance ? `Supervisor guidance:\n${guidance}` : '',
     prior ? `Recent trajectory:\n${prior}` : '',
     `Current observation:\n${request.frame}`,
     'Return exactly one game input and no explanation.',
