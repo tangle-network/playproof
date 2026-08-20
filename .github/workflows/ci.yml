@@ -27,11 +27,16 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 22
+      # The pool has python3 but no ensurepip/python3-venv and no sudo, so uv
+      # is bootstrapped into the job's temp dir and owns the venv and installs.
       - name: Create a Python virtual environment
         run: |
-          python3 -m venv "$RUNNER_TEMP/venv"
+          curl --silent --show-error --location --fail --retry 3 https://astral.sh/uv/install.sh \
+            | env UV_INSTALL_DIR="$RUNNER_TEMP/uv" INSTALLER_NO_MODIFY_PATH=1 sh
+          "$RUNNER_TEMP/uv/uv" venv --python 3.12 "$RUNNER_TEMP/venv"
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
           echo "PLAYPROOF_PYTHON=$RUNNER_TEMP/venv/bin/python" >> "$GITHUB_ENV"
+          echo "UV=$RUNNER_TEMP/uv/uv" >> "$GITHUB_ENV"
       - name: Install dependencies
         run: |
           if [ -f pnpm-lock.yaml ]; then
@@ -65,15 +70,20 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 22
+      # The pool has python3 but no ensurepip/python3-venv and no sudo, so uv
+      # is bootstrapped into the job's temp dir and owns the venv and installs.
       - name: Create a Python virtual environment
         run: |
-          python3 -m venv "$RUNNER_TEMP/venv"
+          curl --silent --show-error --location --fail --retry 3 https://astral.sh/uv/install.sh \
+            | env UV_INSTALL_DIR="$RUNNER_TEMP/uv" INSTALLER_NO_MODIFY_PATH=1 sh
+          "$RUNNER_TEMP/uv/uv" venv --python 3.12 "$RUNNER_TEMP/venv"
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
           echo "PLAYPROOF_PYTHON=$RUNNER_TEMP/venv/bin/python" >> "$GITHUB_ENV"
+          echo "UV=$RUNNER_TEMP/uv/uv" >> "$GITHUB_ENV"
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Install PyBoy
-        run: $PLAYPROOF_PYTHON -m pip install pyboy==2.6.0
+        run: "$UV" pip install --python "$PLAYPROOF_PYTHON" pyboy==2.6.0
       - name: Download the pinned ROM and verify its identity
         run: |
           curl --silent --show-error --location --fail --retry 3 \
@@ -99,17 +109,21 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 22
+      # The pool has python3 but no ensurepip/python3-venv and no sudo, so uv
+      # is bootstrapped into the job's temp dir and owns the venv and installs.
       - name: Create a Python virtual environment
         run: |
-          python3 -m venv "$RUNNER_TEMP/venv"
+          curl --silent --show-error --location --fail --retry 3 https://astral.sh/uv/install.sh \
+            | env UV_INSTALL_DIR="$RUNNER_TEMP/uv" INSTALLER_NO_MODIFY_PATH=1 sh
+          "$RUNNER_TEMP/uv/uv" venv --python 3.12 "$RUNNER_TEMP/venv"
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
           echo "PLAYPROOF_PYTHON=$RUNNER_TEMP/venv/bin/python" >> "$GITHUB_ENV"
+          echo "UV=$RUNNER_TEMP/uv/uv" >> "$GITHUB_ENV"
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Install Gymnasium
         run: |
-          $PLAYPROOF_PYTHON -m pip install --upgrade pip
-          $PLAYPROOF_PYTHON -m pip install "gymnasium[toy-text]"
+          "$UV" pip install --python "$PLAYPROOF_PYTHON" "gymnasium[toy-text]"
       - name: Compile the Gymnasium worker
         run: $PLAYPROOF_PYTHON -m compileall -q gym
       # CartPole-v1 and FrozenLake-v1 are part of Gymnasium, so this job needs
@@ -132,17 +146,21 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 22
+      # The pool has python3 but no ensurepip/python3-venv and no sudo, so uv
+      # is bootstrapped into the job's temp dir and owns the venv and installs.
       - name: Create a Python virtual environment
         run: |
-          python3 -m venv "$RUNNER_TEMP/venv"
+          curl --silent --show-error --location --fail --retry 3 https://astral.sh/uv/install.sh \
+            | env UV_INSTALL_DIR="$RUNNER_TEMP/uv" INSTALLER_NO_MODIFY_PATH=1 sh
+          "$RUNNER_TEMP/uv/uv" venv --python 3.12 "$RUNNER_TEMP/venv"
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
           echo "PLAYPROOF_PYTHON=$RUNNER_TEMP/venv/bin/python" >> "$GITHUB_ENV"
+          echo "UV=$RUNNER_TEMP/uv/uv" >> "$GITHUB_ENV"
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Install stable-retro
         run: |
-          $PLAYPROOF_PYTHON -m pip install --upgrade pip
-          $PLAYPROOF_PYTHON -m pip install stable-retro
+          "$UV" pip install --python "$PLAYPROOF_PYTHON" stable-retro
       # Run this from outside the checkout: the repository's own `retro/`
       # worker directory shadows the installed package on sys.path[0].
       - name: Verify the emulator and its bundled free ROM are importable
@@ -168,17 +186,21 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 22
+      # The pool has python3 but no ensurepip/python3-venv and no sudo, so uv
+      # is bootstrapped into the job's temp dir and owns the venv and installs.
       - name: Create a Python virtual environment
         run: |
-          python3 -m venv "$RUNNER_TEMP/venv"
+          curl --silent --show-error --location --fail --retry 3 https://astral.sh/uv/install.sh \
+            | env UV_INSTALL_DIR="$RUNNER_TEMP/uv" INSTALLER_NO_MODIFY_PATH=1 sh
+          "$RUNNER_TEMP/uv/uv" venv --python 3.12 "$RUNNER_TEMP/venv"
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
           echo "PLAYPROOF_PYTHON=$RUNNER_TEMP/venv/bin/python" >> "$GITHUB_ENV"
+          echo "UV=$RUNNER_TEMP/uv/uv" >> "$GITHUB_ENV"
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Install ale-py
         run: |
-          $PLAYPROOF_PYTHON -m pip install --upgrade pip
-          $PLAYPROOF_PYTHON -m pip install ale-py
+          "$UV" pip install --python "$PLAYPROOF_PYTHON" ale-py
       - name: Verify the emulator and its bundled ROM set are importable
         run: $PLAYPROOF_PYTHON -c "from ale_py import roms; ids = roms.get_all_rom_ids(); print(len(ids), 'ROMs'); print(roms.get_rom_path('breakout'))"
       # ale-py bundles the Atari ROM set, so this job needs no ROM secret and
