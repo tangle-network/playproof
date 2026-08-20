@@ -93,6 +93,14 @@
       "types": "./dist/adapters/ale.d.ts",
       "import": "./dist/adapters/ale.js"
     },
+    "./adapters/gym-rpc": {
+      "types": "./dist/adapters/gym-rpc.d.ts",
+      "import": "./dist/adapters/gym-rpc.js"
+    },
+    "./adapters/gymnasium": {
+      "types": "./dist/adapters/gymnasium.d.ts",
+      "import": "./dist/adapters/gymnasium.js"
+    },
     "./adapters/retro-rpc": {
       "types": "./dist/adapters/retro-rpc.d.ts",
       "import": "./dist/adapters/retro-rpc.js"
@@ -119,6 +127,7 @@
     "test:pyboy": "tsx pyboy-tetris.test.mts",
     "test:retro": "tsx stable-retro.test.mts",
     "test:ale": "tsx ale.test.mts",
+    "test:gym": "tsx gymnasium.test.mts",
     "test:pyboy-libbet": "tsx pyboy-libbet.test.mts",
     "verify:package": "node scripts/verify-package.mjs",
     "ci": "pnpm check:boundary && pnpm typecheck && pnpm test && pnpm build && pnpm verify:package",

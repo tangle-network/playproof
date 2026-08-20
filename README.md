@@ -255,6 +255,33 @@ The [Arcade Learning Environment](https://github.com/Farama-Foundation/Arcade-Le
 
 `ale-py` bundles the Atari ROM set, so the adapter and its test run on a clean CI machine with no download and no secret. The bundled reference plays Breakout; supply a reference playthrough through `options.reference` for any of the other ROMs.
 
+### Any Gymnasium environment
+
+```ts
+import { makeGymnasium } from '@tangle-network/playproof/adapters/gymnasium'
+
+const { game, contract, reference, inputs, dispose } = makeGymnasium({
+  envId: 'CartPole-v1',
+})
+```
+
+One Python worker turns any registered [Gymnasium](https://gymnasium.farama.org) environment with a `Discrete` action space into a `Game`: classic control, toy text, procedurally generated suites, and text environments, including third-party environments that register with Gymnasium. `MultiDiscrete`, `MultiBinary`, and `Box` action spaces are refused at boot with a clear message.
+
+- **Inputs.** One word per turn: `NOOP` plus one name per action. Names come from `get_action_meanings()` when the environment exposes it, otherwise they are `a0` … `a{n-1}`. A discrete environment has no guaranteed idle action, so `NOOP` and any unknown word do not step the environment at all: the state is unchanged, because an agent typo is not a cheat.
+- **Observation.** The `ansi` render for text environments, the text itself for text observations, and a labelled number list otherwise, plus a step and reward summary line.
+- **Evidence.** Cumulative reward, step count, termination flags, and the numeric entries of the environment's `info` dictionary, joined by the SHA-256 of the whole observation and a bounded numeric projection of it. Playproof evidence is integer-only, so reward and numeric `info` entries are multiplied by 1000 and rounded: reward 1.0 is `cumulativeReward` 1000.
+- **The honest limit.** A generic environment has **no privileged channel the agent cannot author**. Reward, `info`, and the observation are exactly what the environment hands the policy, so this tier is reward-derived, not hidden, and it is weaker than the RAM-backed score an emulator adapter reads. Verification still holds because it is replay: the verifier re-executes the environment from the seed and the input log and recomputes every milestone.
+- **Verification.** `replay`, and only for environments where `reset(seed=…)` fixes the whole trajectory. `CartPole-v1` and `FrozenLake-v1` with `is_slippery: false` do, and the gate measures it across separate worker processes. An environment that reads a clock, a global RNG, or external state is not replay-verifiable and must not be given a contract.
+
+Both bundled reference playthroughs — a scripted balancing run on `CartPole-v1` and the shortest winning path on the `FrozenLake-v1` 4x4 map — use environments that ship inside Gymnasium, so the gate runs on a clean machine with no asset:
+
+```bash
+pip install "gymnasium[toy-text]"
+PLAYPROOF_REQUIRE_GYM=1 pnpm test:gym
+```
+
+For any other environment, supply a reference playthrough through `options.reference`.
+
 ### Steam and Xbox
 
 ```ts
