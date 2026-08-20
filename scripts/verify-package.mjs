@@ -36,11 +36,14 @@ try {
     'package/dist/drivers/openai-compatible.js',
     'package/dist/adapters/native-desktop.js',
     'package/dist/adapters/native-2048.js',
+    'package/dist/adapters/gymnasium.js',
     'package/dist/adapters/pyboy-generic.js',
     'package/dist/adapters/stable-retro.js',
     'package/dist/platforms/steam.js',
     'package/dist/platforms/xbox.js',
     'package/dist/desktop/worker.py',
+    'package/dist/gym/worker.py',
+    'package/dist/gym/reference-cartpole.json',
     'package/dist/native/worker.py',
     'package/dist/pyboy/worker.py',
     'package/dist/retro/worker.py',
@@ -81,6 +84,7 @@ try {
     import { createOpenAICompatibleDriver } from '@tangle-network/playproof/drivers/openai-compatible'
     import { makeNativeDesktopAdapter } from '@tangle-network/playproof/adapters/native-desktop'
     import { makeNative2048 } from '@tangle-network/playproof/adapters/native-2048'
+    import { makeGymnasium } from '@tangle-network/playproof/adapters/gymnasium'
     import { makePyBoyGeneric } from '@tangle-network/playproof/adapters/pyboy-generic'
     import { makeStableRetro } from '@tangle-network/playproof/adapters/stable-retro'
     import { SteamWebApiEvidenceSource } from '@tangle-network/playproof/platforms/steam'
@@ -93,6 +97,7 @@ try {
       createOpenAICompatibleDriver,
       makeNativeDesktopAdapter,
       makeNative2048,
+      makeGymnasium,
       makePyBoyGeneric,
       makeStableRetro,
       SteamWebApiEvidenceSource,

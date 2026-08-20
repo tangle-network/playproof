@@ -12,6 +12,8 @@ export default defineConfig({
     'adapters/pyboy-rpc': 'adapters/pyboy-rpc.ts',
     'adapters/pyboy-generic': 'adapters/pyboy-generic.ts',
     'adapters/pyboy-tetris': 'adapters/pyboy-tetris.ts',
+    'adapters/gym-rpc': 'adapters/gym-rpc.ts',
+    'adapters/gymnasium': 'adapters/gymnasium.ts',
     'adapters/retro-rpc': 'adapters/retro-rpc.ts',
     'adapters/stable-retro': 'adapters/stable-retro.ts',
     'platforms/steam': 'platforms/steam.ts',
