@@ -124,6 +124,7 @@ function buildMessages(
   const user = [
     `Decision ${context.turn} of ${context.maxTurns}.`,
     `Remaining measured budget: $${context.remainingBudgetUsd.toFixed(6)}.`,
+    context.guidance ? `Supervisor guidance:\n${context.guidance}` : '',
     recent ? `Recent trajectory:\n${recent}` : '',
     `Current observation:\n${frame}`,
     'Next input:',

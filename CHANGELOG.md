@@ -4,7 +4,21 @@ All notable changes to Playproof are documented here.
 
 ## 0.2.0
 
+### Campaigns
+
+- `runCampaign` plays one verifiable run in bounded segments over the shared episode loop.
+- `CampaignLedger` records inputs, per-decision cost and latency, segments, steering, analyses, and verified progress as plain JSON.
+- Resume by replay: a saved ledger reconstructs the input log, milestone tracking, trajectory, and spend, then continues the same run in a new process.
+- `saveLedger` and `loadLedger` write atomically and validate strictly; a ledger that disagrees with itself or with the pinned game, seed, contract, budget, or turn limit is rejected.
+- Segment reports give an analyst new milestones, verified progress, spend, remaining budget, the last frame, and a bounded recent trajectory.
+- Analyst and human steering hooks, with explicit steering outranking analysis and either able to stop the run.
+- `AgentDecisionContext.guidance` carries the latest note to the next decision; the CLI and OpenAI-compatible drivers pass it through unchanged protocols.
+- Agent Runtime campaign example with one agent per decision, one analyst task per segment, a human steering file, and ledger resume.
+
 ### Game and platform adapters
+
+- Real-emulator PyBoy regression on the free Libbet and the Magic Floor ROM, pinned by hash and run in CI.
+- The PyBoy worker no longer writes a cartridge save next to the ROM, which made each later boot start from a different state.
 
 - `adapters/stable-retro`: one worker brings every console stable-retro bundles a libretro core for into Playproof — NES, SNES, Genesis/Mega Drive, Game Boy, Game Boy Color, Game Boy Advance, Atari 2600, Sega Master System, Game Gear, and PC Engine.
 - Privileged evidence is read from the game's own integration variables in RAM, joined by a rendered-frame hash and bounded numbers derived from that frame.

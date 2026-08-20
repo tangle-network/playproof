@@ -39,9 +39,47 @@ jobs:
             pnpm install --no-frozen-lockfile
           fi
       - name: Compile Python workers
-        run: $PLAYPROOF_PYTHON -m compileall -q desktop native pyboy retro
+        run: $PLAYPROOF_PYTHON -m compileall -q desktop native pyboy
       - name: Full release-equivalent gate
         run: pnpm run ci
+
+  real-pyboy-libbet:
+    name: real emulator regression on a free ROM
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Libbet and the Magic Floor (pinobatch/libbet) is free software, so CI
+      # may download the ROM. pyboy/discovery-libbet.json pins the same build.
+      LIBBET_URL: https://github.com/pinobatch/libbet/releases/download/v0.08/libbet.gb
+      LIBBET_SHA256: 3607412031c8287cf878299ce96e581e85b852dde703806343b95576fa3ff1a9
+      LIBBET_MD5: ce9716a3a431f9722d58d30947f26921
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
+        with:
+          version: 11.17.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install PyBoy
+        run: $PLAYPROOF_PYTHON -m pip install pyboy==2.6.0
+      - name: Download the pinned ROM and verify its identity
+        run: |
+          curl --silent --show-error --location --fail --retry 3 \
+            --output "$RUNNER_TEMP/libbet.gb" "$LIBBET_URL"
+          echo "$LIBBET_SHA256  $RUNNER_TEMP/libbet.gb" | sha256sum --check --strict -
+          echo "$LIBBET_MD5  $RUNNER_TEMP/libbet.gb" | md5sum --check --strict -
+      - name: Replay the reference run on the real emulator
+        env:
+          PLAYPROOF_REQUIRE_ROM: '1'
+        run: PLAYPROOF_ROM="$RUNNER_TEMP/libbet.gb" pnpm test:pyboy-libbet
 
   real-stable-retro:
     name: stable-retro multi-console adapter on a real emulator
