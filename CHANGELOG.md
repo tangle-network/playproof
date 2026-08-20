@@ -2,6 +2,19 @@
 
 All notable changes to Playproof are documented here.
 
+## 0.2.0
+
+### Campaigns
+
+- `runCampaign` plays one verifiable run in bounded segments over the shared episode loop.
+- `CampaignLedger` records inputs, per-decision cost and latency, segments, steering, analyses, and verified progress as plain JSON.
+- Resume by replay: a saved ledger reconstructs the input log, milestone tracking, trajectory, and spend, then continues the same run in a new process.
+- `saveLedger` and `loadLedger` write atomically and validate strictly; a ledger that disagrees with itself or with the pinned game, seed, contract, budget, or turn limit is rejected.
+- Segment reports give an analyst new milestones, verified progress, spend, remaining budget, the last frame, and a bounded recent trajectory.
+- Analyst and human steering hooks, with explicit steering outranking analysis and either able to stop the run.
+- `AgentDecisionContext.guidance` carries the latest note to the next decision; the CLI and OpenAI-compatible drivers pass it through unchanged protocols.
+- Agent Runtime campaign example with one agent per decision, one analyst task per segment, a human steering file, and ledger resume.
+
 ## 0.1.0
 
 Initial open-source release.

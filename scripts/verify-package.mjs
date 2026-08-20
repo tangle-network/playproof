@@ -56,7 +56,10 @@ try {
   const extract = spawnSync('tar', ['-xzf', tarball, '-C', extractDir], { encoding: 'utf8' })
   if (extract.status !== 0) fail(`tar extraction failed:\n${extract.stderr}`)
   const manifest = JSON.parse(readFileSync(join(extractDir, 'package', 'package.json'), 'utf8'))
-  if (manifest.name !== '@tangle-network/playproof' || manifest.version !== '0.1.0') {
+  // The declared version is the release identity; a hardcoded copy here only
+  // goes stale one bump later.
+  const declared = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  if (manifest.name !== '@tangle-network/playproof' || manifest.version !== declared.version) {
     fail(`packed identity mismatch: ${manifest.name}@${manifest.version}`)
   }
   if (manifest.dependencies && Object.keys(manifest.dependencies).length > 0) {
