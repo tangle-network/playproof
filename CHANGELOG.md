@@ -2,6 +2,13 @@
 
 All notable changes to Playproof are documented here.
 
+## 0.2.0
+
+### Game and platform adapters
+
+- Real-emulator PyBoy regression on the free Libbet and the Magic Floor ROM, pinned by hash and run in CI.
+- The PyBoy worker no longer writes a cartridge save next to the ROM, which made each later boot start from a different state.
+
 ## 0.1.0
 
 Initial open-source release.

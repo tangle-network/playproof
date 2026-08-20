@@ -36,6 +36,8 @@ pnpm ci
 
 The real PyBoy/Tetris regression (`PLAYPROOF_ROM=... pnpm test:pyboy` followed by `pnpm exec tsx calibrate.mts`) runs locally with a legally obtained ROM that matches `pyboy/reference-tetris.json`; CI cannot obtain that ROM, so the release manager runs it before tagging.
 
+The equivalent free-ROM regression (`pnpm test:pyboy-libbet`) runs in CI on every pull request, because the Libbet and the Magic Floor ROM is free software that the job downloads and verifies by hash.
+
 ## Cut a release
 
 1. Update `package.json` and `CHANGELOG.md` in one pull request.
