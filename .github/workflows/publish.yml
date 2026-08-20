@@ -23,10 +23,11 @@ jobs:
       tag: ${{ steps.release.outputs.tag }}
       sha256: ${{ steps.package.outputs.sha256 }}
     steps:
+      # The identity step below fetches the tag again; on the self-hosted pool an
+      # anonymous HTTPS fetch has no credential helper, so the job token stays.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
-          persist-credentials: false
       - name: Verify release identity
         id: release
         env:
