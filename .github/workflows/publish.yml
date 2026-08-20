@@ -121,7 +121,10 @@ jobs:
           version=$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).version)' "$manifest")
           test "$name" = "$EXPECTED_NAME"
           test "$version" = "$EXPECTED_VERSION"
-          if npm view "$name@$version" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+          encoded=$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$name")
+          tags=$(curl -fsS "https://registry.npmjs.org/-/package/$encoded/dist-tags" 2>/dev/null || echo '{}')
+          if npm view "$name@$version" version --registry=https://registry.npmjs.org >/dev/null 2>&1 \
+            || node -e 'process.exit(Object.values(JSON.parse(process.argv[1])).includes(process.argv[2]) ? 0 : 1)' "$tags" "$version"; then
             echo "$name@$version already published; skipping"
           else
             npm publish "$package" --access public --provenance
