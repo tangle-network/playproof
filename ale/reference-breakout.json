@@ -1,0 +1,130 @@
+{
+  "schemaVersion": 1,
+  "game": "breakout",
+  "seed": 0,
+  "frames": 4,
+  "romSha": "376323f051c3c373c887fd83abead39d87d844ff283d435f4addbfc1710c6fd5",
+  "channels": [
+    {
+      "id": "ram_ball_x",
+      "index": 99,
+      "decode": "u8"
+    },
+    {
+      "id": "ram_ball_y",
+      "index": 101,
+      "decode": "u8"
+    },
+    {
+      "id": "ram_paddle_x",
+      "index": 72,
+      "decode": "u8"
+    }
+  ],
+  "milestones": [
+    {
+      "id": "score-opened",
+      "tier": "engine-state",
+      "variable": "score",
+      "op": ">=",
+      "trigger": 1
+    },
+    {
+      "id": "frame-at-first-score",
+      "tier": "screen-frame",
+      "sample": "frame-hash",
+      "variable": "score",
+      "op": ">=",
+      "trigger": 1,
+      "requires": [
+        "score-opened"
+      ]
+    },
+    {
+      "id": "save-at-first-score",
+      "tier": "save-file",
+      "sample": "save-hash",
+      "variable": "score",
+      "op": ">=",
+      "trigger": 1,
+      "requires": [
+        "score-opened"
+      ]
+    },
+    {
+      "id": "score-tier-2",
+      "tier": "engine-state",
+      "variable": "score",
+      "op": ">=",
+      "trigger": 2,
+      "requires": [
+        "score-opened"
+      ]
+    },
+    {
+      "id": "score-tier-4",
+      "tier": "engine-state",
+      "variable": "score",
+      "op": ">=",
+      "trigger": 4,
+      "requires": [
+        "score-opened"
+      ]
+    },
+    {
+      "id": "life-lost",
+      "tier": "engine-state",
+      "variable": "lives",
+      "op": "<",
+      "trigger": 5,
+      "sampleOp": "==",
+      "requires": [
+        "score-opened"
+      ]
+    }
+  ],
+  "inputs": [
+    "FIRE", "LEFT", "LEFT", "LEFT", "RIGHT", "RIGHT", "LEFT", "LEFT",
+    "NOOP", "RIGHT", "LEFT", "LEFT", "RIGHT", "NOOP", "LEFT", "LEFT",
+    "NOOP", "NOOP", "LEFT", "LEFT", "LEFT", "NOOP", "RIGHT", "NOOP",
+    "LEFT", "RIGHT", "RIGHT", "LEFT", "NOOP", "RIGHT", "RIGHT", "LEFT",
+    "LEFT", "RIGHT", "RIGHT", "RIGHT", "LEFT", "LEFT", "RIGHT", "RIGHT",
+    "NOOP", "LEFT", "RIGHT", "RIGHT", "LEFT", "LEFT", "RIGHT", "RIGHT",
+    "FIRE", "FIRE", "RIGHT", "RIGHT", "NOOP", "RIGHT", "LEFT", "LEFT",
+    "LEFT", "LEFT", "RIGHT", "LEFT", "LEFT", "RIGHT", "RIGHT", "LEFT",
+    "LEFT", "LEFT", "RIGHT", "LEFT", "LEFT", "RIGHT", "RIGHT", "LEFT",
+    "LEFT", "LEFT", "RIGHT", "LEFT", "LEFT", "LEFT", "NOOP", "RIGHT",
+    "RIGHT", "LEFT", "LEFT", "RIGHT", "RIGHT", "RIGHT", "LEFT", "RIGHT",
+    "RIGHT", "LEFT", "LEFT", "RIGHT", "RIGHT", "RIGHT", "LEFT", "RIGHT",
+    "FIRE", "RIGHT", "LEFT", "RIGHT", "RIGHT", "RIGHT", "LEFT", "LEFT",
+    "LEFT", "LEFT", "RIGHT", "LEFT", "LEFT", "RIGHT", "RIGHT", "LEFT",
+    "LEFT", "LEFT", "RIGHT", "LEFT", "LEFT", "RIGHT", "RIGHT", "LEFT",
+    "LEFT", "LEFT", "RIGHT", "LEFT", "LEFT", "LEFT", "NOOP", "RIGHT",
+    "RIGHT", "LEFT", "LEFT", "RIGHT", "RIGHT", "RIGHT", "LEFT", "RIGHT",
+    "RIGHT", "LEFT", "LEFT", "RIGHT", "RIGHT", "RIGHT", "LEFT", "RIGHT",
+    "RIGHT", "FIRE", "LEFT", "LEFT", "LEFT", "RIGHT", "RIGHT", "LEFT",
+    "LEFT", "LEFT", "RIGHT", "NOOP", "LEFT", "LEFT", "RIGHT", "NOOP",
+    "LEFT", "LEFT", "RIGHT", "LEFT", "LEFT", "LEFT", "LEFT", "RIGHT",
+    "NOOP", "LEFT", "RIGHT", "RIGHT", "LEFT", "LEFT", "RIGHT", "RIGHT",
+    "NOOP", "LEFT", "RIGHT", "RIGHT", "LEFT", "LEFT", "FIRE", "RIGHT",
+    "RIGHT", "LEFT", "NOOP", "RIGHT", "NOOP", "LEFT", "RIGHT", "RIGHT",
+    "LEFT", "LEFT", "RIGHT", "FIRE", "FIRE", "FIRE", "FIRE", "FIRE",
+    "LEFT", "LEFT", "LEFT", "RIGHT", "RIGHT", "LEFT", "NOOP", "RIGHT",
+    "RIGHT", "LEFT"
+  ],
+  "provenance": {
+    "source": "paddle-following policy recorded once against the emulator; the policy located the paddle and the ball on the rendered screen and steered towards the ball, and FIRE relaunched the ball after each serve",
+    "package": "ale-py 0.12.1",
+    "rom": "the Atari ROM set ships inside ale-py, so no download and no user-supplied ROM are required",
+    "observed": {
+      "scoreOpensAfterInputs": 32,
+      "scoreReaches2AfterInputs": 73,
+      "scoreReaches4AfterInputs": 158,
+      "lifeLostAfterInputs": 199,
+      "finalScore": 5,
+      "finalLives": 4
+    },
+    "determinism": "two separate worker processes produced identical screen hashes, RAM channels, counters, and ALEState serializations at all 211 snapshots of this script",
+    "note": "Thresholds here are trigger points only. Every milestone value in the contract is sampled from the replayed trajectory by deriveContract, never copied by hand."
+  }
+}
