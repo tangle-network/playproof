@@ -2,6 +2,17 @@
 
 All notable changes to Playproof are documented here.
 
+## 0.3.0
+
+### Game and platform adapters
+
+- `adapters/ale`: the Atari 2600 through the Arcade Learning Environment, the substrate the reinforcement-learning literature reports on, so a Playproof score is directly comparable with published baselines.
+- The worker drives `ALEInterface` and not a Gymnasium wrapper, so Playproof owns the determinism knobs: it sets the seed, disables sticky actions, and applies the frame repeat itself.
+- Evidence stays bounded. Score, lives, and emulator counters are always published; the 128-byte RAM page never is, and only the byte indices the caller names as channels reach `engineState`.
+- Cross-process determinism is measured, not assumed. Screens, RAM, counters, and the serialized `ALEState` reproduce byte for byte, so this adapter publishes `saveBlobHash` where `adapters/stable-retro` could not, and its contract pins a save-file milestone.
+- Checkpoint and restore carry the cumulative score with the emulator state, so a restored worker resumes on the exact snapshotted instant.
+- `ale-py` bundles the Atari ROM set, so the adapter gate runs a real emulator on a clean CI machine with no download and no secret.
+
 ## 0.2.0
 
 ### Campaigns
