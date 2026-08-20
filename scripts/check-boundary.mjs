@@ -25,6 +25,7 @@ const productionPrefixes = [
   'native/',
   'platforms/',
   'pyboy/',
+  'retro/',
 ]
 const productionFiles = new Set([
   'artifact.ts',

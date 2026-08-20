@@ -37,11 +37,14 @@ try {
     'package/dist/adapters/native-desktop.js',
     'package/dist/adapters/native-2048.js',
     'package/dist/adapters/pyboy-generic.js',
+    'package/dist/adapters/stable-retro.js',
     'package/dist/platforms/steam.js',
     'package/dist/platforms/xbox.js',
     'package/dist/desktop/worker.py',
     'package/dist/native/worker.py',
     'package/dist/pyboy/worker.py',
+    'package/dist/retro/worker.py',
+    'package/dist/retro/reference-airstriker.json',
   ]
   for (const path of required) if (!entries.includes(path)) fail(`packed artifact missing ${path}`)
   for (const path of entries) {
@@ -79,6 +82,7 @@ try {
     import { makeNativeDesktopAdapter } from '@tangle-network/playproof/adapters/native-desktop'
     import { makeNative2048 } from '@tangle-network/playproof/adapters/native-2048'
     import { makePyBoyGeneric } from '@tangle-network/playproof/adapters/pyboy-generic'
+    import { makeStableRetro } from '@tangle-network/playproof/adapters/stable-retro'
     import { SteamWebApiEvidenceSource } from '@tangle-network/playproof/platforms/steam'
     import { XboxRestEvidenceSource } from '@tangle-network/playproof/platforms/xbox'
     const required = [
@@ -90,6 +94,7 @@ try {
       makeNativeDesktopAdapter,
       makeNative2048,
       makePyBoyGeneric,
+      makeStableRetro,
       SteamWebApiEvidenceSource,
       XboxRestEvidenceSource,
     ]

@@ -219,6 +219,25 @@ The PyBoy adapter supports deterministic replay, memory snapshots, save states, 
 
 The real-emulator regression runs in CI on [Libbet and the Magic Floor](https://github.com/pinobatch/libbet), a free-software Game Boy game whose release ROM the job downloads and verifies by SHA-256 and MD5. `pnpm test:pyboy-libbet` boots the generic adapter from `pyboy/discovery-libbet.json`, replays the reference run, and checks that the derived milestones verify, that two power-on replays produce identical evidence, and that a garbage input script does not. A commercial ROM such as Tetris stays on the release manager's machine, so `pnpm test:pyboy` remains a local gate.
 
+### Libretro consoles through stable-retro
+
+```ts
+import { makeStableRetro } from '@tangle-network/playproof/adapters/stable-retro'
+
+const { game, contract, reference, inputs, dispose } = makeStableRetro({
+  game: 'Airstriker-Genesis',
+})
+```
+
+One Python worker covers every console [stable-retro](https://github.com/Farama-Foundation/stable-retro) bundles a libretro core for: NES, SNES, Genesis/Mega Drive, Game Boy, Game Boy Color, Game Boy Advance, Atari 2600, Sega Master System, Game Gear, and PC Engine. Nothing in the adapter is console-specific. Button names, privileged variables, and screen resolution come from the selected game's integration data.
+
+- **Inputs.** `NOOP`, any button the core reports, and any `+`-joined combination such as `LEFT+B`. Unknown words are no-ops. Each input is held for `frames` emulator frames, four by default.
+- **Observation.** An ASCII downsample of the screen plus a one-line variable summary.
+- **Evidence.** Integration variables such as score and lives, read from RAM through the game's `data.json`, plus the rendered-frame hash and a few bounded numbers derived from that frame.
+- **Verification.** `replay`. Frames and variables were measured bit-identical across separate worker processes; the raw libretro save-state blob was measured **not** byte-stable across processes, so the adapter deliberately publishes no save hash. See [Execution adapters](docs/adapters.md) for the numbers.
+
+`Airstriker-Genesis` ships inside stable-retro under a free licence, so the adapter and its test run on a clean CI machine with no ROM secret. Bring other legally obtained ROMs in with `python -m retro.import <dir>` and supply a reference playthrough through `options.reference`.
+
 ### Steam and Xbox
 
 ```ts
@@ -281,6 +300,13 @@ Real PyBoy controls additionally require a legally obtained ROM matching the pin
 PLAYPROOF_ROM=/legal/path/Tetris.gb \
 PLAYPROOF_PYTHON=python \
 pnpm test:pyboy
+```
+
+The stable-retro gate needs no ROM, because the emulator ships one:
+
+```bash
+pip install stable-retro
+PLAYPROOF_REQUIRE_RETRO=1 pnpm test:retro
 ```
 
 ## License

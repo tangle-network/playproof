@@ -148,7 +148,12 @@ export class WorkerRpc {
     return this.call<T>('checkpoint')
   }
 
-  restore<T>(state: T): { gen: number; frame: number } {
+  /**
+   * The checkpoint payload is opaque to the transport and its shape belongs to
+   * the worker, so `unknown` is the honest parameter type. It also lets an
+   * adapter narrow this method to its own checkpoint type.
+   */
+  restore(state: unknown): { gen: number; frame: number } {
     return this.call('restore', { state })
   }
 

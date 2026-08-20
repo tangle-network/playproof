@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 1,
+  "game": "Airstriker-Genesis-v0",
+  "state": null,
+  "seed": 0,
+  "frames": 4,
+  "romSha": "a8be7b0ca850119b167f9644e6a4a22e983d61a4",
+  "milestones": [
+    {
+      "id": "score-opened",
+      "tier": "engine-state",
+      "variable": "score",
+      "op": ">",
+      "trigger": 0
+    },
+    {
+      "id": "frame-at-first-score",
+      "tier": "screen-frame",
+      "sample": "frame-hash",
+      "variable": "score",
+      "op": ">",
+      "trigger": 0,
+      "requires": ["score-opened"]
+    },
+    {
+      "id": "screen-active-at-first-score",
+      "tier": "screen-frame",
+      "sample": "frame-path",
+      "path": "activeCells",
+      "variable": "score",
+      "op": ">",
+      "trigger": 0,
+      "requires": ["score-opened"]
+    },
+    {
+      "id": "score-tier-2",
+      "tier": "engine-state",
+      "variable": "score",
+      "op": ">=",
+      "trigger": 40,
+      "requires": ["score-opened"]
+    },
+    {
+      "id": "life-lost",
+      "tier": "engine-state",
+      "variable": "lives",
+      "op": "<",
+      "trigger": 3,
+      "sampleOp": "==",
+      "requires": ["score-opened"]
+    }
+  ],
+  "inputs": [
+    "B", "NOOP", "LEFT", "LEFT", "B", "NOOP", "RIGHT", "RIGHT",
+    "B", "NOOP", "LEFT", "LEFT", "B", "NOOP", "RIGHT", "RIGHT",
+    "B", "NOOP", "LEFT", "LEFT", "B", "NOOP", "RIGHT", "RIGHT",
+    "B", "NOOP", "LEFT", "LEFT", "B", "NOOP", "RIGHT", "RIGHT",
+    "B", "NOOP", "LEFT", "LEFT", "B", "NOOP", "RIGHT", "RIGHT",
+    "B", "NOOP", "LEFT", "LEFT", "B", "NOOP", "RIGHT", "RIGHT",
+    "B", "NOOP", "LEFT", "LEFT", "B", "NOOP", "RIGHT", "RIGHT",
+    "B", "NOOP", "LEFT", "LEFT", "B", "NOOP", "RIGHT", "RIGHT",
+    "B", "NOOP", "LEFT", "LEFT", "B", "NOOP", "RIGHT", "RIGHT",
+    "B", "NOOP", "LEFT", "LEFT", "B", "NOOP", "RIGHT", "RIGHT",
+    "B", "NOOP", "LEFT", "LEFT", "B", "NOOP", "RIGHT", "RIGHT",
+    "B", "NOOP", "LEFT", "LEFT", "B", "NOOP", "RIGHT", "RIGHT"
+  ],
+  "provenance": {
+    "source": "scripted fire-and-strafe cycle, selected by comparing candidate cycles on the emulator",
+    "package": "stable-retro 1.0.1",
+    "rom": "Airstriker-Genesis ships with stable-retro under a free licence; no download and no user-supplied ROM are required",
+    "observed": {
+      "scoreOpensAfterInputs": 41,
+      "scoreReaches40AfterInputs": 52,
+      "lifeLostAfterInputs": 93,
+      "finalScore": 80,
+      "finalLives": 2
+    },
+    "note": "Thresholds here are trigger points only. Every milestone value in the contract is sampled from the replayed trajectory by deriveContract, never copied by hand."
+  }
+}
