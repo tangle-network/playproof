@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use Playproof, please cite it using the metadata in this file."
+type: software
+title: "Playproof"
+authors:
+  - given-names: "Drew"
+    family-names: "Stone"
+    website: "https://scholar.google.com/citations?user=Klmiw5MAAAAJ&hl=en"
+  - given-names: "Aviv"
+    family-names: "Yaish"
+    orcid: "https://orcid.org/0000-0002-7971-2494"
+    website: "https://aviv.yai.sh/"
+abstract: "Turn games into verifiable, cost-aware benchmarks for any agent."
+keywords:
+  - agents
+  - benchmarks
+  - games
+  - evaluation
+  - verification
+  - replay
+  - steam
+  - xbox
+  - emulators
+  - openai
+  - claude-code
+license: Apache-2.0
+repository-code: "https://github.com/tangle-network/playproof"
+url: "https://github.com/tangle-network/playproof#readme"
