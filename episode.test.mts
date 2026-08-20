@@ -30,4 +30,14 @@ import { engineCrawler, engineCrawlerContract, ENGINE_CRAWLER_REFERENCE } from '
   assert.deepEqual(record.verified, ['hp-untouched', 'room-1'])
 }
 
+// A scripted driver is positioned by the harness turn, so a driver created in a
+// fresh process resumes a campaign mid-script instead of restarting it.
+{
+  const driver = scriptedDriver(['a', 'b', 'c'])
+  const context = { turn: 3, maxTurns: 10, seed: 0, spentUsd: 0, remainingBudgetUsd: 1 }
+  assert.equal((await driver.act('', [], context)).input, 'c')
+  assert.equal((await driver.act('', [], { ...context, turn: 4 })).input, 'noop')
+  assert.equal((await driver.act('', [], { ...context, turn: 1 })).input, 'a')
+}
+
 console.log('playproof episode: loop, budget, and partial-progress semantics OK')
