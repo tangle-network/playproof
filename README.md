@@ -359,3 +359,17 @@ PLAYPROOF_REQUIRE_ALE=1 pnpm test:ale
 ## License
 
 Apache-2.0.
+
+## Citation
+
+If you use Playproof in your work, please cite it:
+
+```bibtex
+@software{stone_yaish_playproof,
+  author = {Stone, Drew and Yaish, Aviv},
+  title  = {Playproof},
+  url    = {https://github.com/tangle-network/playproof}
+}
+```
+
+Machine-readable citation metadata is available in [`CITATION.cff`](CITATION.cff).
