@@ -1,0 +1,243 @@
+# Playproof
+
+**Turn games into verifiable, cost-aware benchmarks for any agent.**
+
+Playproof separates four concerns that game benchmarks often blur together:
+
+1. **Execution** — launch or emulate the game and apply one declared input at a time.
+2. **Observation** — show the evaluated agent only the allowed frame or text representation.
+3. **Evidence** — privately collect engine state, saves, events, rendered state, or platform receipts.
+4. **Verification** — recompute earned milestones and sign the exact run, build, contract, inputs, cost, and latency.
+
+The agent can be an API model, a local policy, Claude Code, Codex CLI, OpenCode, a reinforcement-learning policy, a multi-agent system, or any custom harness. The core interface has no model, provider, orchestration, or sandbox dependency.
+
+## Install
+
+```bash
+pnpm add @tangle-network/playproof
+```
+
+Node.js 20.19 or newer is required. Python is needed only by adapters whose worker is implemented in Python, such as PyBoy and the generic desktop worker.
+
+## Minimal benchmark
+
+```ts
+import {
+  executeBenchmark,
+  type AgentDriver,
+  type BenchmarkTarget,
+} from '@tangle-network/playproof'
+
+const driver: AgentDriver = {
+  async act(frame, history, context) {
+    const input = await chooseAction({
+      frame,
+      history,
+      remainingBudgetUsd: context.remainingBudgetUsd,
+    })
+    return { input, costUsd: 0 }
+  },
+}
+
+const result = await executeBenchmark(
+  target satisfies BenchmarkTarget<unknown>,
+  driver,
+  {
+    budgetUsd: 1,
+    maxTurns: 100,
+    actor: { kind: 'agent', id: 'my-agent-v1' },
+    signer: { privateKey, keyId: 'benchmark-recorder-v1' },
+  },
+)
+
+console.log(result.record.verified)
+console.log(result.signed)
+```
+
+`BenchmarkTarget` pins the game, exact build digest, platform capabilities, milestone contract, and reference inputs. `executeBenchmark` uses the shared episode engine, records every decision and measured cost, recomputes progression, and emits an Ed25519-signed publication envelope.
+
+## Any agent means any agent
+
+The complete contract is deliberately small:
+
+```ts
+interface AgentDriver {
+  act(
+    frame: string,
+    history: readonly { input: string; frame: string }[],
+    context: {
+      turn: number
+      maxTurns: number
+      seed: number
+      spentUsd: number
+      remainingBudgetUsd: number
+      signal?: AbortSignal
+    },
+  ): Promise<{ input: string; costUsd: number }>
+}
+```
+
+Playproof includes two optional conveniences:
+
+### OpenAI-compatible HTTP
+
+```ts
+import { createOpenAICompatibleDriver } from '@tangle-network/playproof/drivers/openai-compatible'
+
+const driver = createOpenAICompatibleDriver({
+  baseUrl: 'https://your-endpoint.example/v1',
+  apiKey: process.env.AGENT_API_KEY,
+  model: 'your-model',
+  commands: ['up', 'down', 'left', 'right'],
+  pricing: {
+    inputPerMillionUsd: 1,
+    outputPerMillionUsd: 4,
+  },
+})
+```
+
+### Any CLI or coding harness
+
+```ts
+import { createCliAgentDriver } from '@tangle-network/playproof/drivers/cli'
+
+const driver = createCliAgentDriver({
+  command: '/opt/my-agent',
+  args: ['--one-turn'],
+  stdin: 'json',
+  output: 'json',
+  commands: ['left', 'right'],
+  timeoutMs: 120_000,
+  maxOutputBytes: 2 << 20,
+})
+```
+
+The CLI driver spawns without a shell and bounds time and output. It can invoke Claude Code, Codex CLI, OpenCode, Pi, a local executable, or a container entrypoint. See [Agent drivers](docs/agent-drivers.md) and `examples/` for complete integrations, including a caller-supplied Tangle Agent Runtime backend.
+
+## Verification modes
+
+Different platforms provide different proof strengths. Playproof records the distinction instead of collapsing everything into “supported.”
+
+| Mode | Hard statement | Appropriate targets | Limit |
+|---|---|---|---|
+| `replay` | A verifier-owned execution reproduced each milestone from the pinned build, seed, and inputs. | Deterministic emulators and games | Determinism must be continuously calibrated. |
+| `trusted-recorder` | The named recorder signed the inputs, accounting, observations, and evidence it captured. | Ordinary native desktop games | The recorder boundary is trusted; state is not independently reproduced. |
+| `platform-attested` | A signed recorder captured normalized progress from a named platform API or title-side SDK and pinned the raw-response digest. | Steam or Xbox API/SDK reads | This is not a Steam/Microsoft signature unless an adapter verifies a provider-signed proof. |
+
+A benchmark declaration that cannot support its selected mode is rejected before execution.
+
+## Evidence and milestone contracts
+
+Milestones can use:
+
+- normalized engine state;
+- normalized save data;
+- exact save identity;
+- append-only events;
+- normalized fields derived from a rendered frame;
+- exact rendered identity; or
+- baseline-to-final platform achievements and statistics.
+
+Use semantic checks such as `score >= 10` for progression. Exact hashes identify one specific save or frame and should not define a semantic milestone when multiple valid trajectories can reach the same outcome.
+
+Dependencies between milestones form a declared partial order. A later achievement cannot verify before its prerequisites, even when its raw condition already holds.
+
+## Execution adapters
+
+### Deterministic native process
+
+`@tangle-network/playproof/adapters/native-2048` is a complete seeded 2048 implementation in an independent process. It exercises engine, save, event, rendered-frame, checkpoint, frontier-search, replay, and signed-run paths without an emulator dependency.
+
+### Generic native desktop games
+
+```ts
+import { makeNativeDesktopAdapter } from '@tangle-network/playproof/adapters/native-desktop'
+```
+
+A declarative desktop specification can:
+
+- launch directly or attach after launcher handoff;
+- select a spawned process, PID file, named descendant, existing PID, or bounded resolver;
+- send allowlisted inputs through stdin or a helper;
+- observe stdout or a capture helper;
+- collect bounded JSON/binary saves, append-only events, rendered fields, and authorized read-only evidence;
+- pin executables and assets into the game-build digest; and
+- terminate the owned process group and descendants.
+
+A nondeterministic target receives exactly one live pass. Every verifier pass after that replays the immutable recorder transcript and never relaunches the game.
+
+### Game Boy through PyBoy
+
+```ts
+import { makePyBoyGeneric } from '@tangle-network/playproof/adapters/pyboy-generic'
+```
+
+The PyBoy adapter supports deterministic replay, memory snapshots, save states, framebuffer evidence, checkpoint exploration, and blind progression-channel discovery. ROMs are never distributed by Playproof.
+
+### Steam and Xbox
+
+```ts
+import { SteamWebApiEvidenceSource } from '@tangle-network/playproof/platforms/steam'
+import { XboxRestEvidenceSource } from '@tangle-network/playproof/platforms/xbox'
+```
+
+Platform milestones are evaluated as **baseline-to-final transitions**. An achievement already unlocked before the run or a statistic whose threshold was already crossed receives no credit. Provider, title, user, environment/sandbox, build, response size, pagination, and monotonic-stat invariants fail closed.
+
+## Exploration and onboarding
+
+A game can be benchmarked when a bridge provides:
+
+1. a finite input vocabulary;
+2. an observation channel;
+3. at least one progression signal the agent cannot directly author; and
+4. an honest verification declaration.
+
+Reference trajectories can come from a human, a scripted policy, another agent, platform events, or deterministic frontier exploration. Blind discovery can identify candidate changing memory channels before a game-specific semantic adapter is written.
+
+“Any game” does not mean zero integration. It means the benchmark core remains unchanged while the platform bridge declares inputs, observations, evidence, trust, and calibration. Anti-cheat-protected or networked games may only permit platform receipts or approved title-side instrumentation.
+
+## Signed publication artifacts
+
+A signed run pins:
+
+- contract hash;
+- game and exact build digest;
+- platform and verification mode;
+- actor identity and seed;
+- budget and turn limits;
+- every input, latency, and reported cost;
+- decision-chain hashes; and
+- claimed milestones.
+
+A capable attacker may rebuild every public hash after editing a run, but cannot forge the recorder’s Ed25519 signature or key identity. Deterministic replay remains stronger than recorder trust whenever the verifier owns a reproducible execution.
+
+## Security boundary
+
+Playproof does not implement DLL injection, runtime patching, anti-cheat bypasses, credential extraction, arbitrary memory writes, network manipulation, or shell-string evaluation.
+
+Unknown and control-character desktop inputs are no-ops. Worker frames, helper output, HTTP bodies, save files, and event files are bounded while being read. Credentials remain in caller-owned driver or adapter configuration and are not included in signed benchmark artifacts.
+
+Please report vulnerabilities through the process in [SECURITY.md](SECURITY.md).
+
+## Development
+
+```bash
+corepack enable
+corepack prepare pnpm@11.17.0 --activate
+pnpm install
+pnpm ci
+```
+
+The release gate runs boundary checks, strict typechecking, adversarial tests, a production build, an exact packed-tarball audit, and clean-consumer imports for every public subpath.
+
+Real PyBoy controls additionally require a legally obtained ROM matching the pinned reference identity:
+
+```bash
+PLAYPROOF_ROM=/legal/path/Tetris.gb \
+PLAYPROOF_PYTHON=python \
+pnpm test:pyboy
+```
+
+## License
+
+Apache-2.0.
