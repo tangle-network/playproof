@@ -15,6 +15,11 @@ All notable changes to Playproof are documented here.
 - `AgentDecisionContext.guidance` carries the latest note to the next decision; the CLI and OpenAI-compatible drivers pass it through unchanged protocols.
 - Agent Runtime campaign example with one agent per decision, one analyst task per segment, a human steering file, and ledger resume.
 
+### Game and platform adapters
+
+- Real-emulator PyBoy regression on the free Libbet and the Magic Floor ROM, pinned by hash and run in CI.
+- The PyBoy worker no longer writes a cartridge save next to the ROM, which made each later boot start from a different state.
+
 ## 0.1.0
 
 Initial open-source release.
