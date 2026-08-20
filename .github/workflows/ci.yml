@@ -9,13 +9,13 @@ on:
 permissions:
   contents: read
 
-env:
-  PLAYPROOF_PYTHON: python
-
+# GitHub-hosted runners are not available to this organization, so every job
+# runs on the self-hosted Linux pool. Python comes from a per-job virtual
+# environment, not actions/setup-python.
 jobs:
   framework:
     name: framework, drivers, desktop, Steam, Xbox, package
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, ci-linux]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -27,9 +27,11 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 22
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-        with:
-          python-version: '3.12'
+      - name: Create a Python virtual environment
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+          echo "PLAYPROOF_PYTHON=$RUNNER_TEMP/venv/bin/python" >> "$GITHUB_ENV"
       - name: Install dependencies
         run: |
           if [ -f pnpm-lock.yaml ]; then
@@ -39,13 +41,13 @@ jobs:
             pnpm install --no-frozen-lockfile
           fi
       - name: Compile Python workers
-        run: $PLAYPROOF_PYTHON -m compileall -q ale desktop native pyboy
+        run: $PLAYPROOF_PYTHON -m compileall -q ale desktop gym native pyboy retro
       - name: Full release-equivalent gate
         run: pnpm run ci
 
   real-pyboy-libbet:
     name: real emulator regression on a free ROM
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, ci-linux]
     timeout-minutes: 20
     env:
       # Libbet and the Magic Floor (pinobatch/libbet) is free software, so CI
@@ -63,9 +65,11 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 22
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-        with:
-          python-version: '3.12'
+      - name: Create a Python virtual environment
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+          echo "PLAYPROOF_PYTHON=$RUNNER_TEMP/venv/bin/python" >> "$GITHUB_ENV"
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Install PyBoy
@@ -83,7 +87,7 @@ jobs:
 
   real-gymnasium:
     name: Gymnasium environment adapter on real environments
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, ci-linux]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -95,9 +99,11 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 22
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-        with:
-          python-version: '3.12'
+      - name: Create a Python virtual environment
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+          echo "PLAYPROOF_PYTHON=$RUNNER_TEMP/venv/bin/python" >> "$GITHUB_ENV"
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Install Gymnasium
@@ -114,7 +120,7 @@ jobs:
 
   real-stable-retro:
     name: stable-retro multi-console adapter on a real emulator
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, ci-linux]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -126,9 +132,11 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 22
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-        with:
-          python-version: '3.12'
+      - name: Create a Python virtual environment
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+          echo "PLAYPROOF_PYTHON=$RUNNER_TEMP/venv/bin/python" >> "$GITHUB_ENV"
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Install stable-retro
@@ -148,7 +156,7 @@ jobs:
 
   real-ale:
     name: ALE Atari adapter on a real emulator
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, ci-linux]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -160,9 +168,11 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 22
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-        with:
-          python-version: '3.12'
+      - name: Create a Python virtual environment
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+          echo "PLAYPROOF_PYTHON=$RUNNER_TEMP/venv/bin/python" >> "$GITHUB_ENV"
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Install ale-py
