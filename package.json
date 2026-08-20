@@ -99,7 +99,7 @@
     "build": "pnpm clean && tsup && node scripts/copy-assets.mjs",
     "check:boundary": "node scripts/check-boundary.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx playproof.test.mts && tsx episode.test.mts && tsx platform.test.mts && tsx desktop-platforms.test.mts && tsx drivers.test.mts",
+    "test": "tsx playproof.test.mts && tsx episode.test.mts && tsx platform.test.mts && tsx desktop-platforms.test.mts && tsx drivers.test.mts && tsx campaign.test.mts",
     "test:pyboy": "tsx pyboy-tetris.test.mts",
     "verify:package": "node scripts/verify-package.mjs",
     "ci": "pnpm check:boundary && pnpm typecheck && pnpm test && pnpm build && pnpm verify:package",
