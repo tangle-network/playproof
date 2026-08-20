@@ -1,0 +1,116 @@
+{
+  "name": "@tangle-network/playproof",
+  "version": "0.1.0",
+  "description": "Turn games into verifiable, cost-aware benchmarks for any agent.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "packageManager": "pnpm@11.17.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tangle-network/playproof.git"
+  },
+  "homepage": "https://github.com/tangle-network/playproof#readme",
+  "bugs": {
+    "url": "https://github.com/tangle-network/playproof/issues"
+  },
+  "keywords": [
+    "agents",
+    "benchmarks",
+    "games",
+    "evaluation",
+    "verification",
+    "replay",
+    "steam",
+    "xbox",
+    "emulators",
+    "openai",
+    "claude-code"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=20.19"
+  },
+  "files": [
+    "dist",
+    "docs",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "SECURITY.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./drivers": {
+      "types": "./dist/drivers/index.d.ts",
+      "import": "./dist/drivers/index.js"
+    },
+    "./drivers/cli": {
+      "types": "./dist/drivers/cli.d.ts",
+      "import": "./dist/drivers/cli.js"
+    },
+    "./drivers/openai-compatible": {
+      "types": "./dist/drivers/openai-compatible.d.ts",
+      "import": "./dist/drivers/openai-compatible.js"
+    },
+    "./adapters/worker-rpc": {
+      "types": "./dist/adapters/worker-rpc.d.ts",
+      "import": "./dist/adapters/worker-rpc.js"
+    },
+    "./adapters/native-2048": {
+      "types": "./dist/adapters/native-2048.d.ts",
+      "import": "./dist/adapters/native-2048.js"
+    },
+    "./adapters/native-desktop": {
+      "types": "./dist/adapters/native-desktop.d.ts",
+      "import": "./dist/adapters/native-desktop.js"
+    },
+    "./adapters/pyboy-rpc": {
+      "types": "./dist/adapters/pyboy-rpc.d.ts",
+      "import": "./dist/adapters/pyboy-rpc.js"
+    },
+    "./adapters/pyboy-generic": {
+      "types": "./dist/adapters/pyboy-generic.d.ts",
+      "import": "./dist/adapters/pyboy-generic.js"
+    },
+    "./adapters/pyboy-tetris": {
+      "types": "./dist/adapters/pyboy-tetris.d.ts",
+      "import": "./dist/adapters/pyboy-tetris.js"
+    },
+    "./platforms/steam": {
+      "types": "./dist/platforms/steam.d.ts",
+      "import": "./dist/platforms/steam.js"
+    },
+    "./platforms/xbox": {
+      "types": "./dist/platforms/xbox.d.ts",
+      "import": "./dist/platforms/xbox.js"
+    }
+  },
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "pnpm clean && tsup && node scripts/copy-assets.mjs",
+    "check:boundary": "node scripts/check-boundary.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx playproof.test.mts && tsx episode.test.mts && tsx platform.test.mts && tsx desktop-platforms.test.mts && tsx drivers.test.mts",
+    "test:pyboy": "tsx pyboy-tetris.test.mts",
+    "verify:package": "node scripts/verify-package.mjs",
+    "ci": "pnpm check:boundary && pnpm typecheck && pnpm test && pnpm build && pnpm verify:package",
+    "prepack": "pnpm build",
+    "prepublishOnly": "pnpm run ci"
+  },
+  "devDependencies": {
+    "@tangle-network/agent-runtime": "0.142.3",
+    "@types/node": "^25.9.3",
+    "tsup": "^8.5.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

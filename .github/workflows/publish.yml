@@ -1,0 +1,137 @@
+name: publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing v* tag to retry
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      sha256: ${{ steps.package.outputs.sha256 }}
+    env:
+      PLAYPROOF_PYTHON: python
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+          persist-credentials: false
+      - name: Verify release identity
+        id: release
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+        run: |
+          if [[ "$RELEASE_TAG" != v* ]] || ! git check-ref-format "refs/tags/$RELEASE_TAG"; then
+            echo "::error::Expected an existing v* tag, got '$RELEASE_TAG'."
+            exit 1
+          fi
+          git fetch --force --no-tags --depth=1 origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "$RELEASE_TAG^{}")"
+          version=$(node -p "require('./package.json').version")
+          test "${RELEASE_TAG#v}" = "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
+        with:
+          version: 11.17.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - name: Install exact dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Compile Python workers
+        run: python -m compileall -q desktop native pyboy
+      - name: Run release-equivalent gate
+        run: pnpm run ci
+      - name: Build exact npm archive
+        id: package
+        run: |
+          mkdir -p "$RUNNER_TEMP/playproof-package"
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/playproof-package"
+          mapfile -t packages < <(find "$RUNNER_TEMP/playproof-package" -maxdepth 1 -type f -name '*.tgz' -print)
+          if [ "${#packages[@]}" -ne 1 ]; then
+            echo "::error::Expected one package, found ${#packages[@]}."
+            exit 1
+          fi
+          package="${packages[0]}"
+          sha256=$(sha256sum "$package" | cut -d' ' -f1)
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+          echo "$sha256  $(basename "$package")" > "$RUNNER_TEMP/playproof-package/SHA256SUMS"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: playproof-package
+          path: ${{ runner.temp }}/playproof-package/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  publish-npm:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      EXPECTED_NAME: '@tangle-network/playproof'
+      EXPECTED_VERSION: ${{ needs.verify.outputs.version }}
+      EXPECTED_SHA256: ${{ needs.verify.outputs.sha256 }}
+      RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+      # The first scoped publication may use the organization NPM_TOKEN.
+      # Once npm Trusted Publishing is configured for this workflow, OIDC is tokenless.
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.18.0
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: playproof-package
+          path: ${{ runner.temp }}/playproof-package
+      - name: Verify and publish the exact archive
+        run: |
+          test "$(npm --version)" = "11.16.0"
+          mapfile -t packages < <(find "$RUNNER_TEMP/playproof-package" -maxdepth 1 -type f -name '*.tgz' -print)
+          test "${#packages[@]}" -eq 1
+          package="${packages[0]}"
+          actual_sha256=$(sha256sum "$package" | cut -d' ' -f1)
+          test "$actual_sha256" = "$EXPECTED_SHA256"
+          manifest=$(tar -xOzf "$package" package/package.json)
+          name=$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).name)' "$manifest")
+          version=$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).version)' "$manifest")
+          test "$name" = "$EXPECTED_NAME"
+          test "$version" = "$EXPECTED_VERSION"
+          if npm view "$name@$version" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "$name@$version already published; skipping"
+          else
+            npm publish "$package" --access public --provenance
+          fi
+      - name: Create immutable GitHub release
+        run: |
+          package=$(find "$RUNNER_TEMP/playproof-package" -maxdepth 1 -type f -name '*.tgz' -print -quit)
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "$RELEASE_TAG release already exists"
+          else
+            gh release create "$RELEASE_TAG" "$package" "$RUNNER_TEMP/playproof-package/SHA256SUMS" \
+              --verify-tag --generate-notes --title "Playproof $EXPECTED_VERSION"
+          fi

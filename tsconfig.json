@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "useUnknownInCatchVariables": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  },
+  "include": [
+    "*.ts",
+    "*.mts",
+    "adapters/**/*.ts",
+    "drivers/**/*.ts",
+    "examples/**/*.mts",
+    "exploration/**/*.ts",
+    "platforms/**/*.ts"
+  ],
+  "exclude": ["dist", "node_modules"]
+}

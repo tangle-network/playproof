@@ -1,0 +1,26 @@
+import { defineConfig } from 'tsup'
+
+export default defineConfig({
+  entry: {
+    index: 'index.ts',
+    'drivers/index': 'drivers/index.ts',
+    'drivers/cli': 'drivers/cli.ts',
+    'drivers/openai-compatible': 'drivers/openai-compatible.ts',
+    'adapters/worker-rpc': 'adapters/worker-rpc.ts',
+    'adapters/native-2048': 'adapters/native-2048.ts',
+    'adapters/native-desktop': 'adapters/native-desktop.ts',
+    'adapters/pyboy-rpc': 'adapters/pyboy-rpc.ts',
+    'adapters/pyboy-generic': 'adapters/pyboy-generic.ts',
+    'adapters/pyboy-tetris': 'adapters/pyboy-tetris.ts',
+    'platforms/steam': 'platforms/steam.ts',
+    'platforms/xbox': 'platforms/xbox.ts',
+  },
+  format: ['esm'],
+  target: 'node20',
+  platform: 'node',
+  splitting: false,
+  sourcemap: true,
+  dts: true,
+  clean: false,
+  treeshake: true,
+})

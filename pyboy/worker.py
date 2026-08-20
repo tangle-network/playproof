@@ -1,0 +1,189 @@
+"""PyBoy worker driven over the shared Playproof line-JSON protocol.
+
+Protocol methods:
+  boot       {game, rom, channels?, preamble?}
+  reset      {}
+  step       {input}
+  evidence   {}
+  frame      {}
+  snapshot   {}        whole WRAM+HRAM, base64 (blind discovery)
+  checkpoint {}        emulator save-state, base64 (frontier exploration)
+  restore    {state}
+  shutdown   {}
+
+Determinism: PyBoy is headless with sound off and fixed input timing. Every
+checkpoint and final input script remains replayable from power-on.
+"""
+import base64
+import hashlib
+import io
+import json
+import os
+import sys
+import warnings
+
+warnings.filterwarnings('ignore')
+
+GAME_WIRING = {}
+WRAM = (0xC000, 0xE000)
+HRAM = (0xFF80, 0xFFFF)
+
+
+def _load_wiring(game):
+    if game not in GAME_WIRING:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        GAME_WIRING[game] = __import__(game)
+    return GAME_WIRING[game]
+
+
+class Worker:
+    def __init__(self):
+        self.pyboy = None
+        self.wiring = None
+        self.rom = None
+        self.game = None
+        self.gen = 0
+        self.frame = 0
+        self._cache = None
+
+    def boot(self, rom, game, channels=None, preamble=None):
+        self.rom = rom
+        self.game = game
+        self.wiring = _load_wiring(game)
+        if channels and hasattr(self.wiring, 'set_channels'):
+            self.wiring.set_channels(channels)
+        if preamble and hasattr(self.wiring, 'set_boot_mode'):
+            self.wiring.set_boot_mode(preamble)
+        self._start()
+
+    def _start(self):
+        if self.pyboy is not None:
+            self.pyboy.stop()
+            self.pyboy = None
+        from pyboy import PyBoy
+        self.pyboy = PyBoy(self.rom, window='null', sound=False, cgb=False)
+        self.frame = 0
+        self.gen += 1
+        self._cache = None
+        self.wiring.run_preamble(self.pyboy)
+        self.frame = self._tick_count()
+
+    def _tick_count(self):
+        return self.pyboy.frame_count
+
+    def reset(self):
+        self._start()
+        return {'gen': self.gen, 'frame': self.frame}
+
+    def _evidence(self):
+        key = (self.gen, self.frame)
+        if self._cache is not None and self._cache[0] == key:
+            return self._cache[1]
+        engine = self.wiring.read_engine_state(self.pyboy, self.frame)
+        buf = io.BytesIO()
+        self.pyboy.save_state(buf)
+        save_hash = hashlib.sha256(buf.getvalue()).hexdigest()
+        frame_hash = hashlib.sha256(self.pyboy.screen.ndarray[:, :, :3].tobytes()).hexdigest()
+        ev = {
+            'engineState': engine,
+            'saveBlobHash': save_hash,
+            'frameHash': frame_hash,
+        }
+        self._cache = (key, ev)
+        return ev
+
+    def step(self, word):
+        self.wiring.apply_input(self.pyboy, word)
+        self.frame = self._tick_count()
+        self._cache = None
+        ev = self._evidence()
+        frame_text = self.wiring.render_frame(self.pyboy, ev['engineState'])
+        return {'frame': self.frame, 'evidence': ev, 'frameText': frame_text}
+
+    def frame_text(self):
+        ev = self._evidence()
+        return self.wiring.render_frame(self.pyboy, ev['engineState'])
+
+    def snapshot(self):
+        chunks = [bytes(self.pyboy.memory[start:end]) for start, end in (WRAM, HRAM)]
+        return {'bytes': base64.b64encode(b''.join(chunks)).decode('ascii')}
+
+    def checkpoint(self):
+        buf = io.BytesIO()
+        self.pyboy.save_state(buf)
+        return {
+            'state': base64.b64encode(buf.getvalue()).decode('ascii'),
+            'frame': self.frame,
+        }
+
+    def restore(self, checkpoint):
+        raw = base64.b64decode(checkpoint['state'])
+        self.pyboy.load_state(io.BytesIO(raw))
+        self.frame = self._tick_count()
+        self._cache = None
+        return {'gen': self.gen, 'frame': self.frame}
+
+
+def main():
+    if len(sys.argv) >= 3:
+        fifo_in, fifo_out = sys.argv[1], sys.argv[2]
+        os.mkfifo(fifo_in)
+        os.mkfifo(fifo_out)
+        ready = os.path.join(os.path.dirname(fifo_in), 'ready')
+        with open(ready, 'w'):
+            pass
+        fin = open(fifo_in, 'r')
+        fout = open(fifo_out, 'w')
+        transport = (fin, fout)
+    else:
+        transport = (sys.stdin, sys.stdout)
+    serve(transport)
+
+
+def serve(transport):
+    fin, fout = transport
+    worker = Worker()
+    for line in fin:
+        line = line.strip()
+        if not line:
+            continue
+        req = {}
+        try:
+            req = json.loads(line)
+            method = req['method']
+            params = req.get('params') or {}
+            if method == 'boot':
+                worker.boot(rom=params['rom'], game=params['game'], channels=params.get('channels'), preamble=params.get('preamble'))
+                result = {'gen': worker.gen, 'frame': worker.frame}
+            elif method == 'reset':
+                result = worker.reset()
+            elif method == 'step':
+                result = worker.step(params['input'])
+            elif method == 'evidence':
+                result = worker._evidence()
+            elif method == 'frame':
+                result = {'text': worker.frame_text()}
+            elif method == 'snapshot':
+                result = worker.snapshot()
+            elif method == 'checkpoint':
+                result = worker.checkpoint()
+            elif method == 'restore':
+                result = worker.restore(params['state'])
+            elif method == 'shutdown':
+                result = {'bye': True}
+                fout.write(json.dumps({'id': req.get('id'), 'ok': True, 'result': result}) + '\n')
+                fout.flush()
+                if worker.pyboy is not None:
+                    worker.pyboy.stop()
+                return
+            else:
+                raise ValueError(f'unknown method {method}')
+            fout.write(json.dumps({'id': req.get('id'), 'ok': True, 'result': result}) + '\n')
+            fout.flush()
+        except Exception as e:
+            fout.write(json.dumps({'id': req.get('id', -1), 'ok': False, 'error': f'{type(e).__name__}: {e}'}) + '\n')
+            fout.flush()
+
+
+if __name__ == '__main__':
+    main()

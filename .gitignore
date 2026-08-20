@@ -1,0 +1,16 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+*.tgz
+*.gb
+*.gbc
+*.rom
+*.sav
+*.state
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+.DS_Store
