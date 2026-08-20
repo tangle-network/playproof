@@ -13,6 +13,7 @@ interface AgentDriver {
       seed: number
       spentUsd: number
       remainingBudgetUsd: number
+      guidance?: string
       signal?: AbortSignal
     },
   ): Promise<{ input: string; costUsd: number }>
@@ -128,6 +129,18 @@ This separation is intentional:
 ## Budget semantics
 
 `remainingBudgetUsd` lets a driver set a provider-side request cap before it spends. Playproof records the actual reported cost even when a provider overruns that reservation. A true hard dollar ceiling therefore requires the driver or upstream provider to enforce the supplied remaining budget; the benchmark never falsifies accounting to make a run appear compliant.
+
+## Campaign guidance
+
+`context.guidance` is present only in a long-horizon campaign, and only after a supervisor or an analyst left a note.
+It is the latest note, not a transcript, and it is out-of-band context: it never enters the hash-chained input log and it never grants progress.
+
+The built-in drivers pass it on without changing their response protocols.
+The CLI driver adds `guidance` to the JSON request context.
+The OpenAI-compatible driver and `renderCliAgentPrompt` add a `Supervisor guidance:` line to the prompt.
+A custom driver may use it, weight it, or ignore it.
+
+See the campaign section of the README for the segment, steering, and resume model.
 
 ## Driver safety rules
 
