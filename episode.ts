@@ -1,5 +1,6 @@
-import { attestRun, inputStatistics, MilestoneTracker, type InputStats } from './attestation'
-import { InputLog, type Game } from './runtime'
+import type { InputStats } from './attestation'
+import { advanceRollout, finalizeRecord, startRollout } from './episode-loop'
+import type { InputLog, Game } from './runtime'
 import type { MilestoneContract } from './schema'
 
 /** One prior action and the observation produced by that action. */
@@ -22,6 +23,12 @@ export interface AgentDecisionContext {
   seed: number
   spentUsd: number
   remainingBudgetUsd: number
+  /**
+   * Latest supervisor or analyst note for a long-horizon run. Absent when the
+   * run has no steering. It is an out-of-band hint, never privileged evidence
+   * and never part of the verified input log.
+   */
+  guidance?: string
   signal?: AbortSignal
 }
 
@@ -76,8 +83,6 @@ export interface EpisodeRecord {
   ms: number
 }
 
-const MAX_INPUT_BYTES = 64 * 1024
-
 export async function playEpisode<S>(
   game: Game<S>,
   contract: MilestoneContract,
@@ -92,76 +97,14 @@ export async function playEpisode<S>(
   if (!Number.isFinite(seed)) throw new Error('seed must be finite')
 
   const started = Date.now()
-  let state = game.init(seed)
-  const log = new InputLog(seed)
-  const history: AgentHistoryEntry[] = []
-  const tracker = new MilestoneTracker(contract)
-  const milestones: MilestoneCostRow[] = []
-  for (const id of tracker.consider(game.evidence(state))) milestones.push({ id, turn: 0, costUsd: 0 })
-  const observed = milestones.map((row) => row.id)
-  let spent = 0
-  let turns = 0
-  const latencyMs: number[] = []
-
-  while (turns < maxTurns && spent < budgetUsd) {
-    signal?.throwIfAborted()
-    const frame = game.frame(state)
-    const context: AgentDecisionContext = {
-      turn: turns + 1,
-      maxTurns,
-      seed,
-      spentUsd: spent,
-      remainingBudgetUsd: Math.max(0, budgetUsd - spent),
-      ...(signal === undefined ? {} : { signal }),
-    }
-    // A driver receives an immutable snapshot, never the harness's mutable log.
-    const visibleHistory = history.map((entry) => ({ ...entry }))
-    const decisionStarted = Date.now()
-    const turn = await driver.act(frame, visibleHistory, Object.freeze(context))
-    latencyMs.push(Date.now() - decisionStarted)
-    signal?.throwIfAborted()
-
-    if (typeof turn.input !== 'string' || turn.input.length === 0) {
-      throw new Error(`driver returned an empty input at turn ${turns + 1}`)
-    }
-    if (Buffer.byteLength(turn.input, 'utf8') > MAX_INPUT_BYTES) {
-      throw new Error(`driver input at turn ${turns + 1} exceeds ${MAX_INPUT_BYTES} bytes`)
-    }
-    if (!Number.isFinite(turn.costUsd) || turn.costUsd < 0) {
-      throw new Error(`driver returned invalid cost at turn ${turns + 1}`)
-    }
-
-    spent += turn.costUsd
-    log.add(turn.input)
-    state = game.step(state, turn.input)
-    for (const id of tracker.consider(game.evidence(state))) {
-      observed.push(id)
-      milestones.push({ id, turn: turns + 1, costUsd: round4(spent) })
-    }
-    history.push({ input: turn.input, frame: game.frame(state) })
-    turns += 1
-  }
-
-  const attestation = attestRun(game, contract, seed, log, [])
+  const rollout = startRollout(game, contract, seed)
+  await advanceRollout(game, driver, rollout, seed, {
+    budgetUsd,
+    maxTurns,
+    ...(signal === undefined ? {} : { signal }),
+  })
   return {
-    record: {
-      game: game.id,
-      turns,
-      spentUsd: round4(spent),
-      budgetUsd,
-      budgetExhausted: spent >= budgetUsd,
-      verified: attestation.verified,
-      milestones,
-      replayDivergence: JSON.stringify(observed) !== JSON.stringify(attestation.verified),
-      latencyMs,
-      inputStats: inputStatistics(log.inputs()),
-      verdict: attestation.verdict,
-      ms: Date.now() - started,
-    },
-    log,
+    record: finalizeRecord(game, contract, seed, rollout, budgetUsd, started),
+    log: rollout.log,
   }
-}
-
-function round4(value: number): number {
-  return Math.round(value * 10_000) / 10_000
 }
