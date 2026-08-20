@@ -16,14 +16,12 @@ permissions:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, ci-linux]
     timeout-minutes: 25
     outputs:
       version: ${{ steps.release.outputs.version }}
       tag: ${{ steps.release.outputs.tag }}
       sha256: ${{ steps.package.outputs.sha256 }}
-    env:
-      PLAYPROOF_PYTHON: python
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -47,18 +45,24 @@ jobs:
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
         with:
           version: 11.17.0
+          dest: ${{ runner.temp }}/setup-pnpm
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 22
-          cache: pnpm
           registry-url: https://registry.npmjs.org
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-        with:
-          python-version: '3.12'
+      # The pool has python3 but no ensurepip/python3-venv and no sudo, so uv
+      # is bootstrapped into the job's temp dir and owns the venv.
+      - name: Create a Python virtual environment
+        run: |
+          curl --silent --show-error --location --fail --retry 3 https://astral.sh/uv/install.sh \
+            | env UV_INSTALL_DIR="$RUNNER_TEMP/uv" INSTALLER_NO_MODIFY_PATH=1 sh
+          "$RUNNER_TEMP/uv/uv" venv --python 3.12 "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+          echo "PLAYPROOF_PYTHON=$RUNNER_TEMP/venv/bin/python" >> "$GITHUB_ENV"
       - name: Install exact dependencies
         run: pnpm install --frozen-lockfile
       - name: Compile Python workers
-        run: python -m compileall -q desktop native pyboy
+        run: $PLAYPROOF_PYTHON -m compileall -q ale desktop gym native pyboy retro
       - name: Run release-equivalent gate
         run: pnpm run ci
       - name: Build exact npm archive
@@ -85,7 +89,7 @@ jobs:
 
   publish-npm:
     needs: verify
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, ci-linux]
     timeout-minutes: 10
     permissions:
       contents: write
