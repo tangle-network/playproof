@@ -52,11 +52,15 @@ export interface AgentDriver {
   ): Promise<DriverTurn>
 }
 
+/**
+ * Replays a fixed input script. The script is indexed by the harness turn, not
+ * by call count, so a driver created in a fresh process resumes a campaign at
+ * the right position instead of restarting the script.
+ */
 export function scriptedDriver(script: readonly string[]): AgentDriver {
-  let index = 0
   return {
-    act: async () => ({
-      input: index < script.length ? script[index++]! : 'noop',
+    act: async (_frame, _history, context) => ({
+      input: script[context.turn - 1] ?? 'noop',
       costUsd: 0,
     }),
   }
