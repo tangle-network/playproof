@@ -4,6 +4,16 @@ All notable changes to Playproof are documented here.
 
 ## 0.4.0
 
+### Verification
+
+- `calibrateContract` replays a reference trajectory and a suite of trivial policies against the same contract, then reports which milestones the trivial policies cannot reach.
+- The suite is one constant policy per input word, a word the game cannot interpret, a round-robin cycle over the vocabulary, and a seeded pseudo-random walk over it. Every policy is deterministic in the seed, so a report reproduces from one number.
+- `assertContractSeparates` fails closed on a contract a trivial policy satisfies, and names every trivial milestone with the baseline that earned it.
+- A contract separates only when at least one milestone is out of reach of every baseline and the reference verifies strictly more milestones than the strongest baseline.
+- `deriveContract` is documented as producing a hypothesis, not a benchmark. It proves that a mark fires on the reference run; it cannot prove the mark is hard to reach.
+- Measured, and pinned by the Libbet regression in CI: a 70-turn agent campaign on the packaged blind-discovery contract earned three milestones, and pressing `a` seventy times earns the same three. `constant:start`, `round-robin`, and a seeded pseudo-random walk also earn them, while five of the eight buttons and an unknown word earn none.
+- Measured on the packaged 2048 target: its reference is a fixed cycle of four directions, so a pseudo-random walk of the same length reaches every milestone. That target exercises the execution and evidence paths and does not measure skill.
+
 ### Game and platform adapters
 
 - `adapters/retroarch`: Playproof drives the RetroArch binary as a black box, so every core RetroArch can load becomes a game with no Playproof code per console. Nothing is linked and no C ABI is touched.
@@ -15,7 +25,7 @@ All notable changes to Playproof are documented here.
 - A state load makes RetroArch reinitialise its drivers and can end the process, so a reset replaces a dead emulator and restores the same pinned boot blob into the new one. The emulator is disposable; the pinned state is the source of truth.
 - No `saveBlobHash` is published. RetroArch compresses save states and the bytes were measured not equal between processes at the same instant, so hashing them would pin a milestone a correct replay cannot reproduce.
 - `channelsFromDiscovery` turns a PyBoy discovery document into RetroArch channels, so the same blind-discovered work-RAM addresses drive two unrelated emulators and neither adapter carries a hand-copied address.
-- The adapter gate is a cross-emulator proof, not just an emulator run: the 266-input reference discovered on PyBoy derives a contract that verifies clean through RetroArch and gambatte, rejects a garbage script of equal length, and reproduces every evidence snapshot in a separately launched emulator.
+- The adapter gate is a cross-emulator proof, not just an emulator run: the 266-input reference discovered on PyBoy derives a contract that verifies clean through RetroArch and gambatte, rejects a script of the same length that never presses a button, and re-verifies in a second, separately launched emulator.
 - The black box was measured rather than assumed, and `docs/adapters.md` records each measurement: `FRAMEADVANCE` is edge triggered, save and load state only fire when they travel with a frame advance, one `READ_CORE_MEMORY` reply must fit 2048 bytes, the remote gamepad consumes one message per poll, RetroArch serves one instance at a time, and an unset directory setting segfaults the emulator inside `retro_run`.
 
 ### Continuous integration

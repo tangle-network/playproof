@@ -185,6 +185,60 @@ Use semantic checks such as `score >= 10` for progression. Exact hashes identify
 
 Dependencies between milestones form a declared partial order. A later achievement cannot verify before its prerequisites, even when its raw condition already holds.
 
+## Calibration: does the contract separate?
+
+A milestone contract says which progressions count.
+It does not say that reaching them is hard.
+`deriveContract` proves only that every mark fires on the reference run, so a contract can pin a memory channel that moves whenever the game runs at all.
+A constant button press then earns exactly what an evaluated agent earns.
+
+**An uncalibrated derived contract is not a benchmark.** Calibrate it, or do not publish a score from it.
+
+```ts
+import { assertContractSeparates, calibrateContract } from '@tangle-network/playproof'
+
+const report = calibrateContract(game, contract, {
+  reference: referenceInputs,
+  vocabulary: ['up', 'down', 'left', 'right', 'a', 'b', 'start', 'select'],
+})
+assertContractSeparates(report)
+```
+
+`calibrateContract` replays the reference and a suite of trivial policies through the same attestation path: one constant policy per input word, a word the game cannot interpret, a round-robin cycle over the vocabulary, and a seeded pseudo-random walk over it.
+Every policy is deterministic in the seed, so a report reproduces from one number.
+
+The report names `separating` (milestones no baseline earned), `trivial` (milestones at least one baseline earned), and `bestBaselineCount`.
+`separates` is true only when something is out of reach of every baseline **and** the reference verifies strictly more milestones than the strongest baseline.
+`assertContractSeparates` throws otherwise, and the message names every trivial milestone with the baseline that earned it.
+
+### The measurement that made this exist
+
+A live agent campaign ran 70 turns on Libbet and the Magic Floor through `adapters/pyboy-generic` and the packaged `pyboy/discovery-libbet.json` blind-discovery document.
+It earned three milestones. Its verdict was clean and its run replay-verified.
+
+Trivial policies of the same length, on the same ROM and the same derived contract, earn this:
+
+| Policy | Milestones verified |
+|---|---|
+| live agent, 70 turns | 3 — `ch_c321-progressed`, `ch_c32d-progressed`, `ch_ff96-progressed` |
+| `constant:a` | 3 — the same set |
+| `constant:start` | 3 — the same set |
+| `round-robin` | 3 — the same set |
+| `pseudo-random` | 3 — the same set |
+| `constant:select` | 2 |
+| `constant:up`, `constant:down`, `constant:left`, `constant:right`, `constant:b` | 0 |
+| an unknown word | 0 |
+
+Pressing `a` seventy times scores what the agent scored.
+That contract measures that frames elapsed, not that a game was played well.
+`pyboy-libbet.test.mts` pins the result on the free ROM in CI, so no later reader can quote a Libbet milestone count as evidence of competence.
+
+The gate reds a second packaged target for the same reason.
+`NATIVE_2048_REFERENCE` is a fixed cycle of four directions, and 2048 merges tiles under almost any input, so a seeded pseudo-random walk of the same length reaches every milestone the reference reaches, `tile-32` included.
+That target exercises the execution, evidence, checkpoint, and signing paths. It does not measure skill.
+
+Blind discovery needs this gate most, because nothing in that pipeline ever asserts that a discovered memory channel means progress.
+
 ## Execution adapters
 
 ### Deterministic native process

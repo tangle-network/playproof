@@ -46,6 +46,37 @@ ALE was measured the same way and gives the opposite answer:
 The PyBoy adapter reaches the same conclusion as ALE on its own substrate and does publish a save-state hash.
 No answer generalizes. A new replay adapter measures its own substrate before it declares a tier.
 
+## Calibration: a derived contract is a hypothesis
+
+An adapter can prove determinism perfectly and still ship a contract that measures nothing.
+Replay proof answers "did this run really happen".
+It does not answer "was reaching that milestone hard", and those are different questions.
+
+`deriveContract` proves that every mark fires on the reference run and that the contract validates.
+It cannot know whether the progression it pinned is out of reach of button mashing.
+So every adapter that derives a contract must run `calibrateContract` and gate publication with `assertContractSeparates`.
+An uncalibrated derived contract is not a benchmark.
+
+Blind-discovery adapters need this most.
+`adapters/pyboy-generic` builds its contract from discovered memory channels alone, and nothing in that pipeline ever asserts that a discovered channel means progress.
+A channel that counts frames, animation ticks, or a menu cursor is indistinguishable, at derivation time, from a channel that counts rooms cleared.
+
+The packaged Libbet contract is the worked example, and it fails the gate.
+A live agent campaign of 70 turns earned three milestones on it, with a clean verdict and a replay-verified run.
+Over the same 70 turns, on the same ROM and the same contract:
+
+| Policy | Milestones verified |
+|---|---|
+| live agent | 3 — `ch_c321-progressed`, `ch_c32d-progressed`, `ch_ff96-progressed` |
+| `constant:a`, `constant:start`, `round-robin`, `pseudo-random` | 3 — the same set |
+| `constant:select` | 2 |
+| `constant:up`, `constant:down`, `constant:left`, `constant:right`, `constant:b` | 0 |
+| an unknown word | 0 |
+
+`pyboy-libbet.test.mts` pins this in CI on the free ROM.
+The finding is not a Libbet defect and not a PyBoy defect.
+It is what a derived contract is worth before somebody measures it.
+
 ## Libretro consoles through stable-retro
 
 ```ts
