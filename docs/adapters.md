@@ -229,9 +229,17 @@ The result of that procedure is saved once, and every reset restores the save. R
 
 ### What is published, and what is pinned
 
-Every milestone this adapter derives is `engine-state`. Screen evidence is published — the agent sees the screen, and `frameHash` and `frameState` travel with each snapshot — but no milestone is pinned to it unless the caller passes `screenMilestones: true`.
+Every milestone this adapter derives is `engine-state`, and only on channels measured to reproduce. Everything else is published for the agent and for exploration, and reported by the gate, but never pinned.
 
-That is a measurement, not caution. Two separately launched emulators reproduce every privileged channel at every one of 61 snapshots, and reproduce the screen for the first 37 before a fade drifts one animation step out of phase; the divergence starts at the same snapshot at `bootFrames` 180 and 300, so it is the game reading residue a core reset does not clear, not the boot length. A screen milestone would therefore pin a frame that an honest replay in a fresh process cannot reproduce. `screenMilestones` exists for cores and games where the same measurement comes out clean.
+That distinction is a measurement, not caution. Between two separately launched emulators on gambatte with Libbet:
+
+| Evidence | Reproduces across processes | Pinned by a milestone |
+|---|---|---|
+| The channels the derived contract reads | every snapshot | **yes** |
+| The full 24-channel declared set | most snapshots; a low-ranked counter and a low-ranked 4-byte word drift | no |
+| Screen (`frameHash`, `frameState`) | the first 37 of 61 snapshots, then a fade drifts one animation step | only under `screenMilestones` |
+
+The screen divergence starts at the same snapshot at `bootFrames` 180 and 300, so it is the game reading residue a core reset does not clear, not the boot length. Pinning any of the unreproduced evidence would fix a milestone to something an honest replay in a fresh process cannot recompute, which is the one failure a verification framework must not have. `screenMilestones` exists for cores and games where the same measurement comes out clean, and the gate prints the agreement counts on every run so the claim stays checkable.
 
 No `saveBlobHash` is published either. RetroArch compresses save states, and a compressed state is not a stable identity for a game position; the bytes were measured **not** equal between processes at the same instant. Checkpoints stay exact within one worker, which is all snapshot and restore need.
 

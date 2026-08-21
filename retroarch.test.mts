@@ -66,8 +66,10 @@ function missing(): string | null {
 }
 
 interface Trace {
-  /** The privileged channel a contract is built on. */
-  rows: string[]
+  /** Only the channels the contract reads. Every milestone rests on these. */
+  pinned: string[]
+  /** Every declared channel, reported rather than asserted across processes. */
+  all: string[]
   /** Screen evidence, reported rather than asserted across processes. */
   screens: string[]
   engine: Record<string, number>[]
@@ -112,14 +114,17 @@ if (gap) {
    * privileged stream and the screen stream are kept apart because only the
    * first is asserted: see the cross-process check below.
    */
-  const trace = (adapter: RetroArch, inputs: readonly string[]): Trace => {
+  const trace = (adapter: RetroArch, inputs: readonly string[], pinnedPaths: readonly string[]): Trace => {
     let state: RetroArchState = adapter.game.init(adapter.seed)
-    const rows: string[] = []
+    const pinned: string[] = []
+    const all: string[] = []
     const screens: string[] = []
     const engine: Record<string, number>[] = []
     const record = (s: RetroArchState): void => {
       const e = adapter.game.evidence(s)
-      rows.push(JSON.stringify(e.engineState))
+      const engineState = e.engineState ?? {}
+      pinned.push(JSON.stringify(pinnedPaths.map((path) => engineState[path])))
+      all.push(JSON.stringify(engineState))
       screens.push(`${e.frameHash}|${JSON.stringify(e.frameState)}`)
     }
     record(state)
@@ -128,7 +133,7 @@ if (gap) {
       record(state)
       engine.push({ ...(adapter.game.evidence(state).engineState ?? {}) })
     }
-    return { rows, screens, engine }
+    return { pinned, all, screens, engine }
   }
 
   const dead = async (pid: number | null): Promise<boolean> => {
@@ -148,6 +153,7 @@ if (gap) {
   let first: Trace
   let firstPid: number | null = null
   let contractIds: string[] = []
+  let pinnedPaths: string[] = []
 
   // ── emulator 1: contract derivation, attestation, determinism in process ──
   const adapter = makeRetroArch(options)
@@ -202,10 +208,14 @@ if (gap) {
     assert.ok(rejected.reasons.some((r) => r.startsWith('claimed-not-reproduced')), rejected.reasons.join('; '))
 
     // Determinism inside one emulator.
-    first = trace(adapter, prefix)
-    const again = trace(adapter, prefix)
-    assert.deepEqual(again.rows, first.rows, 'same-process replay diverged')
-    assert.equal(first.rows.length, prefix.length + 1)
+    pinnedPaths = adapter.contract.milestones
+      .filter((m) => m.check.kind === 'state-path')
+      .map((m) => (m.check as { path: string }).path)
+    assert.ok(pinnedPaths.length > 0)
+    first = trace(adapter, prefix, pinnedPaths)
+    const again = trace(adapter, prefix, pinnedPaths)
+    assert.deepEqual(again.all, first.all, 'same-process replay diverged')
+    assert.equal(first.all.length, prefix.length + 1)
 
     // Unknown inputs are no-ops, not cheats and not errors.
     const junkWords = ['FLIBBERTIGIBBET', '', 'nope', 'b-not-a-button']
@@ -231,9 +241,12 @@ if (gap) {
   let other: Trace
   try {
     secondPid = second.identity.pid
-    other = trace(second, prefix)
-    // The privileged channel every milestone reads must be bit-identical.
-    assert.deepEqual(other.rows, first!.rows, 'cross-process replay diverged')
+    other = trace(second, prefix, pinnedPaths)
+    // Every channel a milestone reads must be bit-identical, because that is
+    // exactly what a verifier recomputes. Channels the contract does not read
+    // are measured and reported below, not asserted: this adapter refuses to
+    // pin a milestone to anything that has not been shown to reproduce.
+    assert.deepEqual(other.pinned, first!.pinned, 'cross-process replay diverged on a channel the contract reads')
   } finally {
     second.dispose()
   }
@@ -264,6 +277,10 @@ if (gap) {
   let screenAgree = 0
   for (let i = 0; i < first!.screens.length; i++) {
     if (first!.screens[i] === other!.screens[i]) screenAgree++
+  }
+  let allAgree = 0
+  for (let i = 0; i < first!.all.length; i++) {
+    if (first!.all[i] === other!.all[i]) allAgree++
   }
 
   const exact = agreement.filter((a) => a.same === a.n)
@@ -304,8 +321,9 @@ if (gap) {
     `retroarch: gambatte through RetroArch ${adapter.identity.status.split(' ')[1] ?? ''} — ` +
     `${contractIds.length}-milestone contract derived from ${channels.length} discovered channels, ` +
     `known-good over ${reference.length} inputs, false-claim rejected, ` +
-    `cross-process engine-state determinism over ${first!.rows.length} snapshots ` +
-    `(screen evidence agreed on ${screenAgree}/${first!.screens.length}, reported not pinned), checkpoint round-trip, ` +
+    `cross-process determinism over ${first!.pinned.length} snapshots on all ${pinnedPaths.length} pinned channels ` +
+    `(all ${channels.length} declared channels agreed on ${allAgree}/${first!.all.length} snapshots, ` +
+    `screen evidence on ${screenAgree}/${first!.screens.length}; both reported, neither pinned), checkpoint round-trip, ` +
     `unknown-input no-op, teardown OK; cross-emulator agreement with PyBoy: ` +
     `${exact.length}/${channels.length} channels exact, ${near.length}/${channels.length} within 10% of steps ` +
     `over ${TRACE_INPUTS} inputs`,

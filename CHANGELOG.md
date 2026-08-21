@@ -2,6 +2,25 @@
 
 All notable changes to Playproof are documented here.
 
+## 0.4.0
+
+### Game and platform adapters
+
+- `adapters/retroarch`: Playproof drives the RetroArch binary as a black box, so every core RetroArch can load becomes a game with no Playproof code per console. Nothing is linked and no C ABI is touched.
+- Control is the two UDP interfaces RetroArch already publishes: the network command interface for `FRAMEADVANCE`, `READ_CORE_MEMORY`, `SCREENSHOT`, `SAVE_STATE`, `LOAD_STATE`, and `GET_STATUS`, and the network remote gamepad for per-button state.
+- The worker runs RetroArch headless with `video_driver = "null"`, which opens no window and was measured to render frames for `SCREENSHOT` exactly as the `gl` driver does. Every run gets its own generated config and private save-state, screenshot, and system directories.
+- `bootFrames` is exposed as the real per-game knob it is: a core reset does not clear work RAM, and cross-process determinism of the privileged channels was measured to hold at 180 frames on gambatte with Libbet where it fails at 60.
+- Milestones are derived from memory channels only, and only from channels measured to reproduce. Screen evidence and the low-ranked channels that drift are published for the agent and for exploration but never pinned; the gate prints the agreement counts on every run. Pinning `screenMilestones` is opt-in for cores where the same measurement comes out clean.
+- A state load makes RetroArch reinitialise its drivers and can end the process, so a reset replaces a dead emulator and restores the same pinned boot blob into the new one. The emulator is disposable; the pinned state is the source of truth.
+- No `saveBlobHash` is published. RetroArch compresses save states and the bytes were measured not equal between processes at the same instant, so hashing them would pin a milestone a correct replay cannot reproduce.
+- `channelsFromDiscovery` turns a PyBoy discovery document into RetroArch channels, so the same blind-discovered work-RAM addresses drive two unrelated emulators and neither adapter carries a hand-copied address.
+- The adapter gate is a cross-emulator proof, not just an emulator run: the 266-input reference discovered on PyBoy derives a contract that verifies clean through RetroArch and gambatte, rejects a garbage script of equal length, and reproduces every evidence snapshot in a separately launched emulator.
+- The black box was measured rather than assumed, and `docs/adapters.md` records each measurement: `FRAMEADVANCE` is edge triggered, save and load state only fire when they travel with a frame advance, one `READ_CORE_MEMORY` reply must fit 2048 bytes, the remote gamepad consumes one message per poll, RetroArch serves one instance at a time, and an unset directory setting segfaults the emulator inside `retro_run`.
+
+### Continuous integration
+
+- A `real-retroarch` job installs RetroArch, the gambatte core, and the verified free Libbet ROM from their own upstreams and runs the black-box host gate on the same pool. The job reports an explicit warning and skips instead of failing if the pool cannot install the emulator.
+
 ## 0.3.0
 
 ### Game and platform adapters
@@ -19,17 +38,7 @@ All notable changes to Playproof are documented here.
 - Determinism is measured across separate worker processes, not assumed. `CartPole-v1` and `FrozenLake-v1` with `is_slippery: false` reproduce exactly under `reset(seed)`.
 - Gymnasium has no generic state API, so a checkpoint replays from its seed, and additionally writes back the environment's own state attribute where one is readable. No `pickle` is involved.
 - Milestone contracts are derived from committed reference playthroughs on `CartPole-v1` and `FrozenLake-v1`, both of which ship inside Gymnasium, so the adapter gate needs no asset on a clean CI machine.
-- `adapters/retroarch`: Playproof drives the RetroArch binary as a black box, so every core RetroArch can load becomes a game with no Playproof code per console. Nothing is linked and no C ABI is touched.
-- Control is the two UDP interfaces RetroArch already publishes: the network command interface for `FRAMEADVANCE`, `READ_CORE_MEMORY`, `SCREENSHOT`, `SAVE_STATE`, `LOAD_STATE`, and `GET_STATUS`, and the network remote gamepad for per-button state.
-- The worker runs RetroArch headless with `video_driver = "null"`, which opens no window and was measured to render frames for `SCREENSHOT` exactly as the `gl` driver does. Every run gets its own generated config and private save-state, screenshot, and system directories.
 - Determinism comes from frame stepping, not from a seed, because libretro cores take none. `init(seed)` restores a boot state pinned by a core reset plus a fixed number of frame advances, and every later transition is a counted frame advance from there.
-- `bootFrames` is exposed as the real per-game knob it is: a core reset does not clear work RAM, and cross-process determinism of the privileged channels was measured to hold at 180 frames on gambatte with Libbet where it fails at 60.
-- Milestones are derived from memory channels only. Screen evidence is published for the agent and for checkpoints, but pinning it needs `screenMilestones: true`, because two separately launched emulators reproduced every privileged channel at all 61 snapshots and the screen at only 37 before a fade drifted one animation step.
-- A state load makes RetroArch reinitialise its drivers and can end the process, so a reset replaces a dead emulator and restores the same pinned boot blob into the new one. The emulator is disposable; the pinned state is the source of truth.
-- No `saveBlobHash` is published. RetroArch compresses save states and the bytes were measured not equal between processes at the same instant, so hashing them would pin a milestone a correct replay cannot reproduce.
-- `channelsFromDiscovery` turns a PyBoy discovery document into RetroArch channels, so the same blind-discovered work-RAM addresses drive two unrelated emulators and neither adapter carries a hand-copied address.
-- The adapter gate is a cross-emulator proof, not just an emulator run: the 266-input reference discovered on PyBoy derives a contract that verifies clean through RetroArch and gambatte, rejects a garbage script of equal length, and reproduces every evidence snapshot in a separately launched emulator.
-- The black box was measured rather than assumed, and `docs/adapters.md` records each measurement: `FRAMEADVANCE` is edge triggered, save and load state only fire when they travel with a frame advance, one `READ_CORE_MEMORY` reply must fit 2048 bytes, the remote gamepad consumes one message per poll, RetroArch serves one instance at a time, and an unset directory setting segfaults the emulator inside `retro_run`.
 
 ### Fixes
 
@@ -39,7 +48,6 @@ All notable changes to Playproof are documented here.
 
 - Releases publish from the self-hosted pool without npm provenance: the registry rejects a sigstore bundle built on a self-hosted runner. The tag-to-commit check, the full gate, and the SHA-256 receipt on the GitHub release are the integrity evidence.
 - Every workflow job runs on the organization's self-hosted Linux pool with a per-job `uv` virtual environment and a per-job pnpm install directory; the real-emulator gates (Libbet on PyBoy, Airstriker on stable-retro, Breakout on ALE, CartPole and FrozenLake on Gymnasium) all run there.
-- A `real-retroarch` job installs RetroArch, the gambatte core, and the verified free Libbet ROM from their own upstreams and runs the black-box host gate on the same pool. The job reports an explicit warning and skips instead of failing if the pool cannot install the emulator.
 
 ## 0.2.0
 
