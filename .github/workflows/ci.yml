@@ -323,6 +323,7 @@ jobs:
           # their own packages into a private directory, which needs no root.
           INNER="$RUNNER_TEMP/ra/squashfs-root/usr/bin/retroarch"
           LIBS="$RUNNER_TEMP/ra/extra-libs"
+          LD_EXTRA=""
           mkdir -p "$LIBS"
           if ldd "$INNER" 2>&1 | grep -q "not found"; then
             ( cd "$RUNNER_TEMP" && apt-get download \
