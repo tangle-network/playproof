@@ -167,6 +167,13 @@ FILE_KEYS = {
 FIXED_SETTINGS = {
     'audio_driver': 'null',
     'audio_enable': 'false',
+    # The null video driver initialises no input driver of its own, and on a
+    # headless Linux host RetroArch then fails to pick one and exits with
+    # "Cannot initialize input driver". Playproof never uses local input:
+    # buttons arrive over the network remote gamepad and hotkeys over the
+    # network command interface, both of which are independent of these.
+    'input_driver': 'null',
+    'input_joypad_driver': 'null',
     'video_vsync': 'false',
     'video_threaded': 'false',
     'video_fullscreen': 'false',
