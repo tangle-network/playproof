@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   verify:
-    runs-on: [self-hosted, ci-linux]
+    runs-on: [self-hosted, ci-release]
     timeout-minutes: 25
     outputs:
       version: ${{ steps.release.outputs.version }}
@@ -90,7 +90,7 @@ jobs:
 
   publish-npm:
     needs: verify
-    runs-on: [self-hosted, ci-linux]
+    runs-on: [self-hosted, ci-release]
     timeout-minutes: 10
     permissions:
       contents: write
