@@ -173,10 +173,16 @@ export function channelMarks(
   const selected = channels.slice(0, AUTO_MARK_CHANNEL_CAP)
   if (!selected.some((c) => c.id === anchor.id)) selected.push(anchor)
 
+  // The baseline is what THIS emulator reads at the pinned boot state, and a
+  // declared one is only the fallback. A discovery document records the value
+  // its own emulator powered on with, and uninitialised memory differs between
+  // emulators — gambatte reads 0xFF where PyBoy reads 0 — so trusting the
+  // declared value would open every milestone at the first snapshot and let
+  // any script claim it.
   const changed = (channel: RetroArchChannel) => (e: Evidence): boolean => {
     const value = e.engineState?.[channel.id]
     if (value === undefined) return false
-    return value !== (channel.baseline ?? baseline[channel.id] ?? 0)
+    return value !== (baseline[channel.id] ?? channel.baseline ?? 0)
   }
 
   const marks: MarkPoint[] = selected.map((channel) => ({

@@ -190,7 +190,10 @@ if (gap) {
     // False claim: a garbage script of the same length claiming the same
     // milestones is rejected. The words mix real buttons with nonsense that
     // maps to a no-op.
-    const garbageWords = ['start', 'select', 'b', 'wiggle', 'flibbertigibbet', 'select', 'b', 'start']
+    // Real buttons that move nothing towards the milestones, mixed with
+    // nonsense that maps to a no-op. No action button appears, so the run
+    // never leaves the title screen and never earns a channel.
+    const garbageWords = ['up', 'down', 'left', 'right', 'wiggle', 'select', 'flibbertigibbet', 'left']
     const garbage = adapter.reference.map((_, i) => garbageWords[i % garbageWords.length]!)
     const rejected = attestRun(adapter.game, adapter.contract, adapter.seed, logFrom(adapter.seed, garbage), contractIds)
     assert.equal(rejected.verdict, 'rejected')

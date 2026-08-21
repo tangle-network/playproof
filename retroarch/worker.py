@@ -156,23 +156,6 @@ GLYPH_RAMP = tuple(
 )
 MAX_SUMMARY_CHANNELS = 8
 
-# Every directory RetroArch reads. See measured fact 1: an unset one is a
-# segfault, not a default.
-DIRECTORY_KEYS = (
-    'libretro_directory', 'savestate_directory', 'screenshot_directory',
-    'system_directory', 'savefile_directory', 'cache_directory',
-    'assets_directory', 'bottom_assets_directory', 'core_assets_directory',
-    'log_dir', 'input_remapping_directory', 'rgui_config_directory',
-    'rgui_browser_directory', 'overlay_directory', 'osk_overlay_directory',
-    'video_shader_dir', 'video_filter_dir', 'audio_filter_dir',
-    'joypad_autoconfig_dir', 'thumbnails_directory',
-    'dynamic_wallpapers_directory', 'runtime_log_directory',
-    'recording_output_directory', 'recording_config_directory',
-    'playlist_directory', 'content_favorites_directory',
-    'content_history_directory', 'content_image_history_directory',
-    'content_music_history_directory', 'content_video_directory',
-    'content_database_path', 'cheat_database_path', 'libretro_info_path',
-)
 FILE_KEYS = {
     'core_options_path': 'config/core-options.cfg',
     'content_history_path': 'playlists/history.lpl',

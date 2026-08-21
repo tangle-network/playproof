@@ -316,9 +316,36 @@ jobs:
           echo "PLAYPROOF_RETROARCH=$BIN" >> "$GITHUB_ENV"
           echo "PLAYPROOF_RETROARCH_CORE=$RUNNER_TEMP/ra/cores/gambatte_libretro.so" >> "$GITHUB_ENV"
           echo "PLAYPROOF_ROM=$RUNNER_TEMP/libbet.gb" >> "$GITHUB_ENV"
+          # The buildbot binary links against libraries the pool does not ship
+          # (jack, wayland, EGL). Playproof drives RetroArch with the null
+          # audio and video drivers and never calls into any of them, but the
+          # dynamic linker still needs them present. They are unpacked from
+          # their own packages into a private directory, which needs no root.
+          INNER="$RUNNER_TEMP/ra/squashfs-root/usr/bin/retroarch"
+          LIBS="$RUNNER_TEMP/ra/extra-libs"
+          mkdir -p "$LIBS"
+          if ldd "$INNER" 2>&1 | grep -q "not found"; then
+            ( cd "$RUNNER_TEMP" && apt-get download \
+                libjack-jackd2-0 libwayland-client0 libegl1 libglvnd0 libffi8 \
+                libopus0 libdrm2 libgbm1 libxkbcommon0 2>/dev/null || true )
+            for deb in "$RUNNER_TEMP"/*.deb; do
+              [ -f "$deb" ] || continue
+              dpkg-deb -x "$deb" "$LIBS" 2>/dev/null || true
+            done
+            for dir in $(find "$LIBS" -name '*.so*' -printf '%h\n' 2>/dev/null | sort -u); do
+              LD_EXTRA="$dir:$LD_EXTRA"
+            done
+            echo "LD_LIBRARY_PATH=$LD_EXTRA$RUNNER_TEMP/ra/squashfs-root/usr/lib" >> "$GITHUB_ENV"
+            export LD_LIBRARY_PATH="$LD_EXTRA$RUNNER_TEMP/ra/squashfs-root/usr/lib"
+          fi
           echo "RetroArch executable: $BIN"
-          "$BIN" --version 2>&1 | head -5 || echo "::warning::RetroArch --version produced no output"
-          ldd "$RUNNER_TEMP/ra/squashfs-root/usr/bin/retroarch" 2>&1 | grep -i "not found" || echo "all shared libraries resolve"
+          MISSING=$(ldd "$INNER" 2>&1 | grep -i "not found" | sort -u || true)
+          if [ -n "$MISSING" ]; then
+            echo "unresolved shared libraries:"; echo "$MISSING"
+            exit 1
+          fi
+          echo "all shared libraries resolve"
+          "$BIN" --version 2>&1 | head -3
       # The adapter drives RetroArch headless with `video_driver = "null"`,
       # which was measured to render frames for SCREENSHOT exactly as the gl
       # driver does. xvfb-run is used only when the pool provides it, because
