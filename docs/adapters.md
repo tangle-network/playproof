@@ -247,7 +247,9 @@ No `saveBlobHash` is published either. RetroArch compresses save states, and a c
 
 The gate does not merely run a Game Boy game. It replays the 266-input reference from `pyboy/discovery-libbet.json` — whose channel addresses a blind search found by watching **PyBoy's** work RAM — through RetroArch and gambatte, software that shares no code with PyBoy. `channelsFromDiscovery` converts the discovered addresses into RetroArch channels, so one discovery document drives two unrelated emulators and neither adapter carries a hand-copied address.
 
-The hard assertion is the milestone outcome: the contract derived over those channels verifies clean through RetroArch, and a garbage script of equal length is rejected. Per-step channel agreement with PyBoy's own recorded values is reported rather than asserted exactly, because two emulators put frame boundaries in different places and a channel that samples an animation can disagree on a few steps.
+The hard assertion is the milestone outcome: the contract derived over those channels verifies clean through RetroArch, and a script of the same length that never presses a button is rejected. Per-step channel agreement with PyBoy's own recorded values is reported rather than required to be exact, because two emulators put frame boundaries in different places and a channel that samples an animation disagrees on the steps around each transition.
+
+Measured over the first 120 inputs of the reference, RetroArch with gambatte against PyBoy's recorded values: **21 of 24 channels agree on 71 to 98 per cent of steps**, 8 of them on 118 of 120. Three do not track: the BCD score word, a 4-byte word, and a low counter, all of which sample values that move within a frame. Wrong addresses or a wrong decode would show as agreement near zero, so the gate asserts that at least half the channels agree on half the steps and prints every figure.
 
 ## Candidate adapters
 
