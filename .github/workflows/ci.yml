@@ -290,10 +290,13 @@ jobs:
             chmod +x "$APPIMAGE"
             ( cd "$RUNNER_TEMP/ra" && "$APPIMAGE" --appimage-extract >/dev/null )
           fi
+          # AppRun is preferred over the binary it wraps: it sets the library
+          # path the extracted tree needs, and the inner binary alone exits
+          # immediately without it.
           BIN=""
           for candidate in \
-            "$RUNNER_TEMP/ra/squashfs-root/usr/bin/retroarch" \
             "$RUNNER_TEMP/ra/squashfs-root/AppRun" \
+            "$RUNNER_TEMP/ra/squashfs-root/usr/bin/retroarch" \
             $(find "$RUNNER_TEMP/ra" -type f -name retroarch | head -1); do
             if [ -f "$candidate" ]; then BIN="$candidate"; break; fi
           done
@@ -313,7 +316,9 @@ jobs:
           echo "PLAYPROOF_RETROARCH=$BIN" >> "$GITHUB_ENV"
           echo "PLAYPROOF_RETROARCH_CORE=$RUNNER_TEMP/ra/cores/gambatte_libretro.so" >> "$GITHUB_ENV"
           echo "PLAYPROOF_ROM=$RUNNER_TEMP/libbet.gb" >> "$GITHUB_ENV"
-          "$BIN" --version || true
+          echo "RetroArch executable: $BIN"
+          "$BIN" --version 2>&1 | head -5 || echo "::warning::RetroArch --version produced no output"
+          ldd "$RUNNER_TEMP/ra/squashfs-root/usr/bin/retroarch" 2>&1 | grep -i "not found" || echo "all shared libraries resolve"
       # The adapter drives RetroArch headless with `video_driver = "null"`,
       # which was measured to render frames for SCREENSHOT exactly as the gl
       # driver does. xvfb-run is used only when the pool provides it, because

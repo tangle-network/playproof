@@ -343,6 +343,10 @@ class RetroArch:
         self.content = content
         self.run_dir = tempfile.mkdtemp(prefix='playproof-retroarch-')
         self.log_path = os.path.join(self.run_dir, 'retroarch.log')
+        # RetroArch's own log only exists once it parses its arguments, so its
+        # standard streams are kept too: a binary that cannot start at all
+        # says why there and nowhere else.
+        self.console_path = os.path.join(self.run_dir, 'retroarch-console.log')
         self.state_path = None
         self.process = None
         self.attempts = 0
@@ -492,11 +496,15 @@ class RetroArch:
 
     def _launch(self, system_dir, video_driver):
         config = self._config(system_dir, video_driver)
-        self.process = subprocess.Popen(
-            [self.binary, '--config', config, '--libretro', self.core_path,
-             self.content, '--verbose', '--log-file', self.log_path],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
+        console = open(self.console_path, 'ab')
+        try:
+            self.process = subprocess.Popen(
+                [self.binary, '--config', config, '--libretro', self.core_path,
+                 self.content, '--verbose', '--log-file', self.log_path],
+                stdout=console, stderr=console,
+            )
+        finally:
+            console.close()
         deadline = time.time() + BOOT_TIMEOUT
         status = None
         while time.time() < deadline:
@@ -515,11 +523,16 @@ class RetroArch:
         self.status = status
 
     def log_tail(self, limit=2000):
-        try:
-            with open(self.log_path) as handle:
-                return handle.read()[-limit:]
-        except OSError:
-            return '(no log)'
+        parts = []
+        for label, path in (('log', self.log_path), ('console', self.console_path)):
+            try:
+                with open(path, errors='replace') as handle:
+                    text = handle.read()[-limit:]
+            except OSError:
+                text = ''
+            if text.strip():
+                parts.append('--- RetroArch %s ---\n%s' % (label, text))
+        return '\n'.join(parts) if parts else '(RetroArch produced no output at all)'
 
     def kill(self, keep_run_dir=False):
         process = self.process
