@@ -14,6 +14,25 @@ All notable changes to Playproof are documented here.
 - Measured, and pinned by the Libbet regression in CI: a 70-turn agent campaign on the packaged blind-discovery contract earned three milestones, and pressing `a` seventy times earns the same three. `constant:start`, `round-robin`, and a seeded pseudo-random walk also earn them, while five of the eight buttons and an unknown word earn none.
 - Measured on the packaged 2048 target: its reference is a fixed cycle of four directions, so a pseudo-random walk of the same length reaches every milestone. That target exercises the execution and evidence paths and does not measure skill.
 
+### Game and platform adapters
+
+- `adapters/retroarch`: Playproof drives the RetroArch binary as a black box, so every core RetroArch can load becomes a game with no Playproof code per console. Nothing is linked and no C ABI is touched.
+- Control is the two UDP interfaces RetroArch already publishes: the network command interface for `FRAMEADVANCE`, `READ_CORE_MEMORY`, `SCREENSHOT`, `SAVE_STATE`, `LOAD_STATE`, and `GET_STATUS`, and the network remote gamepad for per-button state.
+- The worker runs RetroArch headless with `video_driver = "null"`, which opens no window and was measured to render frames for `SCREENSHOT` exactly as the `gl` driver does. Every run gets its own generated config and private save-state, screenshot, and system directories.
+- `bootFrames` and `clearRegions` are exposed as the real per-game knobs they are, because a core reset does not clear the memory a console powers on with.
+- The gate asserts what a verifier actually does: the contract derived in one emulator verifies clean in a second, separately launched one over the whole reference. Byte-for-byte agreement between two boots is measured and printed rather than asserted, because a core reset leaves residue the game reads and the measurement says so.
+- Milestones are derived from memory channels only, and only from channels measured to reproduce. Screen evidence and the low-ranked channels that drift are published for the agent and for exploration but never pinned; the gate prints the agreement counts on every run. Pinning `screenMilestones` is opt-in for cores where the same measurement comes out clean.
+- A state load makes RetroArch reinitialise its drivers and can end the process. A reset replaces a dead emulator and restores the same pinned boot blob, because a reset has no evidence to invalidate. A death mid-run ends the run: replaying the inputs so far onto a replacement looks equivalent and was measured not to be, and evidence a verifier cannot recompute is worse than no evidence.
+- No `saveBlobHash` is published. RetroArch compresses save states and the bytes were measured not equal between processes at the same instant, so hashing them would pin a milestone a correct replay cannot reproduce.
+- `channelsFromDiscovery` turns a PyBoy discovery document into RetroArch channels, so the same blind-discovered work-RAM addresses drive two unrelated emulators and neither adapter carries a hand-copied address.
+- The adapter gate is a cross-emulator proof, not just an emulator run: the 266-input reference discovered on PyBoy derives a contract that verifies clean through RetroArch and gambatte, rejects a script of the same length that never presses a button, and re-verifies in a second, separately launched emulator.
+- The black box was measured rather than assumed, and `docs/adapters.md` records each measurement: `FRAMEADVANCE` is edge triggered, save and load state only fire when they travel with a frame advance, one `READ_CORE_MEMORY` reply must fit 2048 bytes, the remote gamepad consumes one message per poll, RetroArch serves one instance at a time, and an unset directory setting segfaults the emulator inside `retro_run`.
+
+### Continuous integration
+
+- A `real-retroarch` job installs RetroArch from the buildbot AppImage, unpacks the libraries that build links but never calls, downloads the gambatte core and the verified free Libbet ROM, and runs the black-box host gate on the self-hosted Linux pool. The job reports an explicit warning and skips instead of failing if the pool cannot install the emulator.
+- macOS is not a supported host: the x86_64 RetroArch under Rosetta segfaults during `retro_run`, so the gate refuses to launch an emulator on darwin and skips with one line. Linux CI is the only execution evidence for this adapter, and the docs say so.
+
 ## 0.3.0
 
 ### Game and platform adapters
@@ -31,6 +50,7 @@ All notable changes to Playproof are documented here.
 - Determinism is measured across separate worker processes, not assumed. `CartPole-v1` and `FrozenLake-v1` with `is_slippery: false` reproduce exactly under `reset(seed)`.
 - Gymnasium has no generic state API, so a checkpoint replays from its seed, and additionally writes back the environment's own state attribute where one is readable. No `pickle` is involved.
 - Milestone contracts are derived from committed reference playthroughs on `CartPole-v1` and `FrozenLake-v1`, both of which ship inside Gymnasium, so the adapter gate needs no asset on a clean CI machine.
+- Determinism comes from frame stepping, not from a seed, because libretro cores take none. `init(seed)` restores a boot state pinned by a core reset plus a fixed number of frame advances, and every later transition is a counted frame advance from there.
 
 ### Fixes
 

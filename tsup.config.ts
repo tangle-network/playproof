@@ -17,6 +17,8 @@ export default defineConfig({
     'adapters/gym-rpc': 'adapters/gym-rpc.ts',
     'adapters/gymnasium': 'adapters/gymnasium.ts',
     'adapters/retro-rpc': 'adapters/retro-rpc.ts',
+    'adapters/retroarch-rpc': 'adapters/retroarch-rpc.ts',
+    'adapters/retroarch': 'adapters/retroarch.ts',
     'adapters/stable-retro': 'adapters/stable-retro.ts',
     'platforms/steam': 'platforms/steam.ts',
     'platforms/xbox': 'platforms/xbox.ts',

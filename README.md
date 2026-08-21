@@ -336,6 +336,45 @@ PLAYPROOF_REQUIRE_GYM=1 pnpm test:gym
 
 For any other environment, supply a reference playthrough through `options.reference`.
 
+### Any RetroArch core
+
+```ts
+import { makeRetroArch, channelsFromDiscovery } from '@tangle-network/playproof/adapters/retroarch'
+
+const { game, contract, reference, inputs, dispose } = makeRetroArch({
+  binary: '/Applications/RetroArch.app/Contents/MacOS/RetroArch',
+  core: 'cores/gambatte_libretro.dylib',
+  content: 'roms/libbet.gb',
+  channels: channelsFromDiscovery(discovery),
+  inputs: ['up', 'down', 'left', 'right', 'a', 'b', 'start', 'select'],
+  reference: discovery.exploration.inputs,
+})
+```
+
+Every other emulator adapter links an emulator into a Python worker. This one links nothing. Playproof launches the RetroArch binary the caller points at and drives it as a black box over the two UDP interfaces RetroArch already publishes, so **every core RetroArch can load becomes a Playproof game with no Playproof code per console** — Nintendo 64, PlayStation, Saturn, Dreamcast, DOS, ScummVM, and the rest of the libretro catalogue, not just the consoles a Python package chose to bundle.
+
+- **Command interface** (`network_cmd_port`, text). `FRAMEADVANCE` steps exactly one frame, `READ_CORE_MEMORY` reads the evidence channels, `SCREENSHOT` captures the frame, `SAVE_STATE` and `LOAD_STATE` carry checkpoints, and `GET_STATUS` confirms every one of them landed.
+- **Remote gamepad** (`network_remote_base_port`, binary). One 20-byte message per button transition sets the pad for the frames that follow.
+- **Inputs.** `NOOP`, any libretro button the caller declares, and any `+`-joined combination such as `up+a`. Unknown words are no-ops. Each input holds the buttons for `pressFrames` frames and then releases them for the rest of the `frames` window.
+- **Observation.** An ASCII downsample of the screenshot plus a one-line channel summary.
+- **Evidence.** Caller-declared memory channels read through the core memory map, joined by the hash of the decoded screenshot and a few bounded numbers derived from it. Milestones are derived from memory channels only, and only from channels measured to reproduce between two separately launched emulators; screen evidence and any drifting channel are published for the agent but never pinned, and the gate prints the agreement counts on every run. `screenMilestones: true` opts in where a core earns it. No save-blob hash either: RetroArch compresses save states, and a compressed state is not a stable identity for a game position.
+- **Verification.** `replay`. Determinism comes from frame stepping, not from a seed — libretro cores take none. `init(seed)` restores a boot state the worker pins with a core reset plus `bootFrames` fixed advances, and every later transition is a counted frame advance from there. The gate proves the claim the way a verifier would: it derives the contract in one emulator and re-verifies it clean in a second, separately launched one. A state load makes RetroArch reinitialise its drivers and can end the process, so a reset replaces a dead emulator and restores the same pinned blob into the new one; the run never sees a different boot state.
+
+Headless: the adapter runs RetroArch with `video_driver = "null"`, which opens no window and was measured to render frames for `SCREENSHOT` exactly as the `gl` driver does. Each run gets its own generated config with private save-state, screenshot, and system directories, so concurrent Playproof runs never share emulator state. RetroArch serves one instance at a time, so one worker owns one emulator: dispose an adapter before booting the next.
+
+Cores and content are never distributed by Playproof. Bring a RetroArch build, a core from the [libretro buildbot](https://buildbot.libretro.com/), and legally obtained content.
+
+**The cross-emulator proof.** The gate replays the 266-input reference from `pyboy/discovery-libbet.json` — the addresses a blind search found by watching *PyBoy's* work RAM — through RetroArch and gambatte, software that shares no code with PyBoy. The same discovered channels carry the same progression, the derived contract verifies clean, and a garbage script of equal length is rejected. `channelsFromDiscovery` is the join, so one discovery document drives both emulators and neither adapter carries a hand-copied address.
+
+```bash
+PLAYPROOF_RETROARCH=/path/to/retroarch \
+PLAYPROOF_RETROARCH_CORE=/path/to/gambatte_libretro.so \
+PLAYPROOF_ROM=/path/to/libbet.gb \
+PLAYPROOF_REQUIRE_RETROARCH=1 pnpm test:retroarch
+```
+
+**macOS is not supported.** The RetroArch that Homebrew installs is an x86_64 build running under Rosetta, and it segfaults inside an environment callback during `retro_run`. The gate therefore refuses to launch an emulator on darwin and skips with one line, even when the paths are set; Linux CI is the only execution evidence for this adapter. Two application defaults (`ApplePersistenceIgnoreState`, `NSAppSleepDisabled`) are named in the worker's failure messages for anyone who wants to try anyway, but the adapter is unproven there.
+
 ### Steam and Xbox
 
 ```ts

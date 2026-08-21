@@ -39,6 +39,7 @@ try {
     'package/dist/adapters/gymnasium.js',
     'package/dist/adapters/pyboy-generic.js',
     'package/dist/adapters/stable-retro.js',
+    'package/dist/adapters/retroarch.js',
     'package/dist/adapters/ale.js',
     'package/dist/platforms/steam.js',
     'package/dist/platforms/xbox.js',
@@ -51,6 +52,7 @@ try {
     'package/dist/retro/reference-airstriker.json',
     'package/dist/ale/worker.py',
     'package/dist/ale/reference-breakout.json',
+    'package/dist/retroarch/worker.py',
   ]
   for (const path of required) if (!entries.includes(path)) fail(`packed artifact missing ${path}`)
   for (const path of entries) {
@@ -90,6 +92,7 @@ try {
     import { makeGymnasium } from '@tangle-network/playproof/adapters/gymnasium'
     import { makePyBoyGeneric } from '@tangle-network/playproof/adapters/pyboy-generic'
     import { makeStableRetro } from '@tangle-network/playproof/adapters/stable-retro'
+    import { makeRetroArch, channelsFromDiscovery } from '@tangle-network/playproof/adapters/retroarch'
     import { makeAle } from '@tangle-network/playproof/adapters/ale'
     import { SteamWebApiEvidenceSource } from '@tangle-network/playproof/platforms/steam'
     import { XboxRestEvidenceSource } from '@tangle-network/playproof/platforms/xbox'
@@ -104,6 +107,8 @@ try {
       makeGymnasium,
       makePyBoyGeneric,
       makeStableRetro,
+      makeRetroArch,
+      channelsFromDiscovery,
       makeAle,
       SteamWebApiEvidenceSource,
       XboxRestEvidenceSource,
