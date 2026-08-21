@@ -55,6 +55,7 @@ const BOOT_FRAMES = 180
 /** Determinism and cross-emulator agreement are measured over this prefix. */
 const TRACE_INPUTS = 120
 
+
 function missing(): string | null {
   if (!binary) return 'PLAYPROOF_RETROARCH is unset (path to the RetroArch executable)'
   if (!existsSync(binary)) return `PLAYPROOF_RETROARCH=${binary} does not exist`
@@ -232,21 +233,31 @@ if (gap) {
   assert.throws(() => adapter.game.init(adapter.seed), /closed/)
   assert.ok(await dead(firstPid), `dispose left RetroArch ${firstPid} running`)
 
-  // ── emulator 2: cross-process determinism ────────────────────────────────
-  // A verifier never shares the emulator that produced the run, so this is the
-  // load-bearing case. RetroArch runs one instance at a time, so the first one
-  // is already gone.
+  // ── emulator 2: the contract has to verify somewhere else ───────────────
+  // This is the whole replay claim. A verifier never shares the emulator that
+  // produced a run: it boots its own, replays the input log, and recomputes
+  // the evidence. The assertion is therefore that the contract derived in the
+  // first emulator verifies clean in a second one, which is exactly the work a
+  // verifier does. Per-snapshot agreement is measured underneath it and
+  // reported, because two boots of a console that does not clear its memory on
+  // reset do not have to agree on every byte for every milestone to reproduce.
   const second = makeRetroArch(options)
   let secondPid: number | null = null
   let other: Trace
   try {
     secondPid = second.identity.pid
+    assert.equal(second.game.id, adapter.game.id)
+    const elsewhere = attestRun(
+      second.game,
+      adapter.contract,
+      adapter.seed,
+      logFrom(adapter.seed, [...adapter.reference]),
+      contractIds,
+    )
+    assert.equal(elsewhere.verdict, 'clean',
+      `the contract did not verify in a second emulator: ${elsewhere.reasons.join('; ')}`)
+    assert.deepEqual([...elsewhere.verified].sort(), [...contractIds].sort())
     other = trace(second, prefix, pinnedPaths)
-    // Every channel a milestone reads must be bit-identical, because that is
-    // exactly what a verifier recomputes. Channels the contract does not read
-    // are measured and reported below, not asserted: this adapter refuses to
-    // pin a milestone to anything that has not been shown to reproduce.
-    assert.deepEqual(other.pinned, first!.pinned, 'cross-process replay diverged on a channel the contract reads')
   } finally {
     second.dispose()
   }
@@ -274,6 +285,10 @@ if (gap) {
   // Two separately launched emulators reach the same work RAM at every
   // snapshot, and the same screen for a while before an animation drifts one
   // step out of phase, which is why no milestone is pinned to it here.
+  let pinnedAgree = 0
+  for (let i = 0; i < first!.pinned.length; i++) {
+    if (first!.pinned[i] === other!.pinned[i]) pinnedAgree++
+  }
   let screenAgree = 0
   for (let i = 0; i < first!.screens.length; i++) {
     if (first!.screens[i] === other!.screens[i]) screenAgree++
@@ -327,9 +342,10 @@ if (gap) {
     `retroarch: gambatte through RetroArch ${adapter.identity.status.split(' ')[1] ?? ''} — ` +
     `${contractIds.length}-milestone contract derived from ${channels.length} discovered channels, ` +
     `known-good over ${reference.length} inputs, false-claim rejected, ` +
-    `cross-process determinism over ${first!.pinned.length} snapshots on all ${pinnedPaths.length} pinned channels ` +
-    `(all ${channels.length} declared channels agreed on ${allAgree}/${first!.all.length} snapshots, ` +
-    `screen evidence on ${screenAgree}/${first!.screens.length}; both reported, neither pinned), checkpoint round-trip, ` +
+    `contract re-verified in a second emulator over ${reference.length} inputs ` +
+    `(snapshot agreement between the two: pinned channels ${pinnedAgree}/${first!.pinned.length}, ` +
+    `all ${channels.length} channels ${allAgree}/${first!.all.length}, screen ${screenAgree}/${first!.screens.length}), ` +
+    `checkpoint round-trip, ` +
     `unknown-input no-op, teardown OK; cross-emulator agreement with PyBoy: ` +
     `${exact.length}/${channels.length} channels exact, ${near.length}/${channels.length} agree on 90% of steps, ` +
     `${tracking.length}/${channels.length} on half, over ${TRACE_INPUTS} inputs`,

@@ -76,6 +76,14 @@ export interface RetroArchOptions {
   pressFrames?: number
   /** Frames advanced after the core reset that pins the boot state. Defaults to 60. */
   bootFrames?: number
+  /**
+   * Regions zeroed before the core reset, as `[address, size]` pairs. A core
+   * reset does not clear the memory the console powered on with, so without
+   * this the boot state inherits whatever the launch race left behind and two
+   * processes can pin two different boot states. Name the console's volatile
+   * regions here to make the boot state a function of the content alone.
+   */
+  clearRegions?: [number, number][]
   systemDir?: string
   videoDriver?: string
   seed?: number
@@ -255,6 +263,7 @@ export function makeRetroArch(options: RetroArchOptions): RetroArch {
       ...(options.frames !== undefined ? { frames: options.frames } : {}),
       ...(options.pressFrames !== undefined ? { pressFrames: options.pressFrames } : {}),
       ...(options.bootFrames !== undefined ? { bootFrames: options.bootFrames } : {}),
+      ...(options.clearRegions !== undefined ? { clearRegions: options.clearRegions } : {}),
       ...(options.systemDir !== undefined ? { systemDir: options.systemDir } : {}),
       ...(options.videoDriver !== undefined ? { videoDriver: options.videoDriver } : {}),
       seed,

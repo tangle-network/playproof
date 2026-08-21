@@ -233,13 +233,19 @@ Every milestone this adapter derives is `engine-state`, and only on channels mea
 
 That distinction is a measurement, not caution. Between two separately launched emulators on gambatte with Libbet:
 
-| Evidence | Reproduces across processes | Pinned by a milestone |
-|---|---|---|
-| The channels the derived contract reads | every snapshot | **yes** |
-| The full 24-channel declared set | most snapshots; a low-ranked counter and a low-ranked 4-byte word drift | no |
-| Screen (`frameHash`, `frameState`) | the first 37 of 61 snapshots, then a fade drifts one animation step | only under `screenMilestones` |
+The claim the gate asserts is the one a verifier actually makes: **the contract derived in one emulator verifies clean in a second, separately launched one**, over the whole reference. That is what replay verification means here.
 
-The screen divergence starts at the same snapshot at `bootFrames` 180 and 300, so it is the game reading residue a core reset does not clear, not the boot length. Pinning any of the unreproduced evidence would fix a milestone to something an honest replay in a fresh process cannot recompute, which is the one failure a verification framework must not have. `screenMilestones` exists for cores and games where the same measurement comes out clean, and the gate prints the agreement counts on every run so the claim stays checkable.
+It is deliberately not "every evidence byte is equal between two boots", because that is measurably not true and asserting it would be dishonest. A core reset does not clear the memory the console powered on with, so two boots start from slightly different residue, and the game reads some of it:
+
+| Evidence | Between two separately launched emulators |
+|---|---|
+| The channels the derived contract reads | usually every snapshot, not always |
+| The full 24-channel declared set | most snapshots; a low-ranked counter and a low-ranked 4-byte word drift |
+| Screen (`frameHash`, `frameState`) | the first 37 of 61 snapshots, then a fade drifts one animation step |
+
+The milestones survive that jitter because they are `>=` thresholds on channels that only move forward, which is why the contract re-verifies even when a byte-for-byte comparison does not. The gate prints all three agreement counts on every run, so the numbers stay visible instead of being asserted away.
+
+Zeroing the console's volatile regions before the reset was measured and did **not** help: with video RAM, work RAM, sprite memory and high RAM cleared, agreement got worse, not better. The `clearRegions` boot option remains available for cores where the same measurement comes out differently, and screen milestones stay behind `screenMilestones` for the same reason.
 
 No `saveBlobHash` is published either. RetroArch compresses save states, and a compressed state is not a stable identity for a game position; the bytes were measured **not** equal between processes at the same instant. Checkpoints stay exact within one worker, which is all snapshot and restore need.
 

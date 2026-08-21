@@ -45,6 +45,8 @@ export interface RetroArchBootOptions {
   pressFrames?: number
   /** Frames advanced after the core reset that pins the boot state. */
   bootFrames?: number
+  /** Regions zeroed before the core reset, as `[address, size]` pairs. */
+  clearRegions?: [number, number][]
   /** BIOS directory for cores that need one. */
   systemDir?: string
   /** RetroArch video driver. `null` is headless and still serves SCREENSHOT. */
@@ -70,6 +72,7 @@ export interface RetroArchIdentity {
   frames: number
   pressFrames: number
   bootFrames: number
+  clearRegions: [number, number][]
   seed: number
   /** RetroArch's process id, so a caller can prove teardown killed it. */
   pid: number | null

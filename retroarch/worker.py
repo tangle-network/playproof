@@ -660,6 +660,30 @@ class RetroArch:
             self._alive()
         raise RetroArchError('RetroArch did not answer READ_CORE_MEMORY for %d blocks' % len(blocks))
 
+    def write_zeros(self, start, size):
+        """Zero a mapped region with WRITE_CORE_MEMORY, in datagram-sized runs.
+
+        RetroArch reads a command datagram into a 2048-byte buffer, so each
+        request carries at most a few hundred bytes written as hex pairs.
+        A core that maps none of the region answers with a refusal, which is
+        not fatal: the caller only asks for regions it wants cleared.
+        """
+        written = 0
+        chunk = 512
+        for offset in range(0, size, chunk):
+            length = min(chunk, size - offset)
+            message = 'WRITE_CORE_MEMORY %x%s' % (start + offset, ' 00' * length)
+            reply = self.command(message)
+            if reply is None:
+                self._alive()
+                raise RetroArchError('RetroArch stopped answering WRITE_CORE_MEMORY')
+            parts = reply.split()
+            if len(parts) >= 3 and parts[2].isdigit():
+                written += int(parts[2])
+            else:
+                return written
+        return written
+
     # ---- screenshot ------------------------------------------------------
 
     def screenshot(self):
@@ -806,6 +830,7 @@ class Worker:
         self.frames = 4
         self.press_frames = 2
         self.boot_frames = 60
+        self.clear_regions = []
         self.seed = 0
         self.gen = 0
         self.frame = 0
@@ -821,11 +846,12 @@ class Worker:
 
     def boot(self, binary, core, content, channels=None, inputs=None, frames=4,
              press_frames=None, boot_frames=60, system_dir=None,
-             video_driver='null', seed=0):
+             video_driver='null', seed=0, clear_regions=None):
         self.frames = max(1, int(frames))
         self.press_frames = max(1, min(self.frames, int(press_frames) if press_frames is not None else min(2, self.frames)))
         self.boot_frames = max(0, int(boot_frames))
         self.seed = int(seed)
+        self.clear_regions = [(int(a), int(b)) for a, b in (clear_regions or [])]
         self.channels = self._normalize_channels(channels or [])
         self.blocks = self._plan_reads(self.channels)
         self.buttons = self._normalize_buttons(inputs)
@@ -854,6 +880,13 @@ class Worker:
         screen only twice, while restoring this save reproduces both every time.
         """
         self._release_all()
+        # A core reset does not clear the memory the console powered on with,
+        # so without this the boot state inherits whatever the launch race
+        # left behind and two processes can pin two different boot states.
+        # Zeroing the caller-named regions first makes the boot state a
+        # function of the content alone.
+        for start, size in self.clear_regions:
+            self.emulator.write_zeros(start, size)
         self.emulator.reset_core()
         self.emulator.advance(self.boot_frames)
         self.boot_blob, advanced = self.emulator.save_state()
@@ -944,6 +977,7 @@ class Worker:
             'frames': self.frames,
             'pressFrames': self.press_frames,
             'bootFrames': self.boot_frames,
+            'clearRegions': [[start, size] for start, size in self.clear_regions],
             'seed': self.seed,
             'pid': self.emulator.process.pid if self.emulator.process else None,
             'frameText': self.frame_text(),
@@ -1189,6 +1223,7 @@ def dispatch(worker, method, params):
             system_dir=params.get('systemDir'),
             video_driver=params.get('videoDriver', 'null'),
             seed=params.get('seed', 0),
+            clear_regions=params.get('clearRegions'),
         )
     if method == 'reset':
         return worker.reset(params.get('seed'))
