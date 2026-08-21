@@ -2,6 +2,18 @@
 
 All notable changes to Playproof are documented here.
 
+## 0.4.0
+
+### Verification
+
+- `calibrateContract` replays a reference trajectory and a suite of trivial policies against the same contract, then reports which milestones the trivial policies cannot reach.
+- The suite is one constant policy per input word, a word the game cannot interpret, a round-robin cycle over the vocabulary, and a seeded pseudo-random walk over it. Every policy is deterministic in the seed, so a report reproduces from one number.
+- `assertContractSeparates` fails closed on a contract a trivial policy satisfies, and names every trivial milestone with the baseline that earned it.
+- A contract separates only when at least one milestone is out of reach of every baseline and the reference verifies strictly more milestones than the strongest baseline.
+- `deriveContract` is documented as producing a hypothesis, not a benchmark. It proves that a mark fires on the reference run; it cannot prove the mark is hard to reach.
+- Measured, and pinned by the Libbet regression in CI: a 70-turn agent campaign on the packaged blind-discovery contract earned three milestones, and pressing `a` seventy times earns the same three. `constant:start`, `round-robin`, and a seeded pseudo-random walk also earn them, while five of the eight buttons and an unknown word earn none.
+- Measured on the packaged 2048 target: its reference is a fixed cycle of four directions, so a pseudo-random walk of the same length reaches every milestone. That target exercises the execution and evidence paths and does not measure skill.
+
 ## 0.3.0
 
 ### Game and platform adapters
