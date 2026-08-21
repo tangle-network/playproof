@@ -137,12 +137,27 @@ jobs:
           else
             npm publish "$package" --access public
           fi
+      # The self-hosted pool has no GitHub CLI, so the release is created
+      # through the REST API with the job token.
       - name: Create immutable GitHub release
         run: |
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY"
+          auth="Authorization: Bearer $GH_TOKEN"
+          version="Accept: application/vnd.github+json"
           package=$(find "$RUNNER_TEMP/playproof-package" -maxdepth 1 -type f -name '*.tgz' -print -quit)
-          if gh release view "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          test -n "$package"
+          if curl --silent --fail --header "$auth" --header "$version" "$api/releases/tags/$RELEASE_TAG" >/dev/null 2>&1; then
             echo "$RELEASE_TAG release already exists"
-          else
-            gh release create "$RELEASE_TAG" "$package" "$RUNNER_TEMP/playproof-package/SHA256SUMS" -R "$GITHUB_REPOSITORY" \
-              --verify-tag --generate-notes --title "Playproof $EXPECTED_VERSION"
+            exit 0
           fi
+          body=$(node -e 'process.stdout.write(JSON.stringify({tag_name: process.argv[1], name: `Playproof ${process.argv[2]}`, generate_release_notes: true}))' "$RELEASE_TAG" "$EXPECTED_VERSION")
+          release=$(curl --silent --show-error --fail --request POST \
+            --header "$auth" --header "$version" --data "$body" "$api/releases")
+          id=$(node -e 'process.stdout.write(String(JSON.parse(process.argv[1]).id))' "$release")
+          for asset in "$package" "$RUNNER_TEMP/playproof-package/SHA256SUMS"; do
+            curl --silent --show-error --fail --request POST \
+              --header "$auth" --header "$version" --header 'Content-Type: application/octet-stream' \
+              --data-binary "@$asset" \
+              "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$id/assets?name=$(basename "$asset")" >/dev/null
+          done
+          echo "created $RELEASE_TAG with $(basename "$package") and SHA256SUMS"
