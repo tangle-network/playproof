@@ -109,12 +109,9 @@ BOOT_ATTEMPTS = 6
 # RetroArch shows the work in its own log or writes the file.
 STATE_ATTEMPTS = 8
 # A state load makes RetroArch reinitialise its video, input, and audio
-# drivers, and that reinitialisation sometimes ends the process, either
-# immediately or a few frames later. The emulator is therefore treated as
-# disposable: the pinned boot state plus the inputs applied since the last
-# reset reproduce the position exactly, which is the same property replay
-# verification rests on, so a dead emulator is replaced and caught up.
-RECOVERIES = 3
+# drivers, and that reinitialisation sometimes ends the process. A reset can
+# therefore replace the emulator, because a reset returns to the pinned boot
+# state and has no evidence to invalidate. A death mid-run ends the run.
 
 # macOS only. AppKit saves restorable window state for an application that
 # does not exit cleanly, and Playproof kills RetroArch to guarantee no
@@ -837,7 +834,6 @@ class Worker:
         self.boot_blob = None
         self.boot_frame = 0
         self.history = []
-        self.recoveries = 0
         self.held = set()
         self._cache = None
         self._content_sha = None
@@ -906,29 +902,6 @@ class Worker:
         self.gen += 1
         self._cache = None
         return {'gen': self.gen, 'frame': self.frame}
-
-    def _recover(self, error):
-        """Replace a dead emulator and put it back on the current position.
-
-        Only a process that has actually gone is replaced; a live emulator
-        that refused a command is a real failure and is raised. The catch-up
-        replays the inputs applied since the last reset, so the recovered
-        position is the same function of the boot state and the input log
-        that a verifier would compute.
-        """
-        alive = self.emulator is not None and self.emulator.process is not None and self.emulator.process.poll() is None
-        if self.emulator is None or alive:
-            raise error
-        if self.recoveries >= RECOVERIES:
-            raise RetroArchError(
-                'RetroArch died %d times in one run and was replaced each time; the last failure was: %s'
-                % (self.recoveries, error))
-        self.recoveries += 1
-        replayed = list(self.history)
-        self._relaunch_onto_boot()
-        for word in replayed:
-            self._apply(word)
-        self._cache = None
 
     def _relaunch_onto_boot(self):
         self.held = set()
@@ -1162,17 +1135,19 @@ class Worker:
         self._cache = None
 
     def step(self, word):
-        before = len(self.history)
-        try:
-            self._apply(word)
-            evidence = self._evidence()
-        except RetroArchError as error:
-            # A half-applied input must not be replayed twice, so the history
-            # is rewound to the last input that completed.
-            del self.history[before:]
-            self._recover(error)
-            self._apply(word)
-            evidence = self._evidence()
+        """Advance one Playproof input.
+
+        An emulator that dies here ends the run. Replacing it and replaying the
+        inputs so far LOOKS equivalent — the position is a function of the boot
+        state and the input log — but it was measured not to be: runs that
+        replaced an emulator mid-flight produced evidence that a second replay
+        in the same worker did not reproduce. Evidence a verifier cannot
+        recompute is worse than no evidence, so this fails loudly instead.
+        A reset may still replace the emulator, because a reset returns to the
+        pinned boot state and has no evidence to invalidate.
+        """
+        self._apply(word)
+        evidence = self._evidence()
         return {'frame': self.frame, 'evidence': evidence, 'frameText': self.frame_text()}
 
     def snapshot(self):
