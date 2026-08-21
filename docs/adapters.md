@@ -15,7 +15,7 @@ The core never changes when a new adapter arrives.
 | `adapters/stable-retro` | Any console stable-retro bundles a libretro core for, out of process | ASCII frame downsample plus a variable summary | Integration variables read from RAM, framebuffer hash, bounded derived frame numbers | `replay` | **Yes**, on the bundled free ROM |
 | `adapters/ale` | Any Atari 2600 ROM `ale-py` bundles, out of process | ASCII frame downsample plus a score, lives, and frame summary | Cumulative score, lives, emulator counters, named RAM bytes, framebuffer hash, emulator-state hash | `replay` | **Yes**, on the bundled ROM set |
 | `adapters/gymnasium` | Any registered Gymnasium environment with a `Discrete` action space, out of process | The `ansi` render, the text observation, or a labelled number list | Cumulative reward, step count, termination flags, numeric `info` entries, the observation hash, and a bounded projection of the observation | `replay`, for seed-deterministic environments only | **Yes**, on environments that ship with the library |
-| `adapters/retroarch` | Any libretro core, inside a RetroArch process the adapter launches and drives as a black box | ASCII downsample of the screenshot plus a one-line channel summary | Caller-declared memory channels read with `READ_CORE_MEMORY`, decoded-screenshot hash, bounded derived frame numbers | `replay` | **Yes**, on a downloaded core and the free Libbet ROM |
+| `adapters/retroarch` | Any libretro core, inside a RetroArch process the adapter launches and drives as a black box | ASCII downsample of the screenshot plus a one-line channel summary | Caller-declared memory channels read with `READ_CORE_MEMORY`; screenshot hash and derived frame numbers are published but not pinned by default | `replay` | **Yes**, on a downloaded core and the free Libbet ROM |
 | `platforms/steam` | Nothing; the title runs elsewhere | Not provided by the adapter | Steam Web API achievements and statistics, or a title-side bridge | `platform-attested` | Contract tests only |
 | `platforms/xbox` | Nothing; the title runs elsewhere | Not provided by the adapter | Xbox services achievements and statistics, or a GDK/XSAPI bridge | `platform-attested` | Contract tests only |
 
@@ -208,6 +208,7 @@ RetroArch is not an API, so each of these is a measurement against the real bina
 | `READ_CORE_MEMORY` reply size | One reply must fit one UDP datagram; 2048 bytes per request works, 4096 does not | Channels are covered by as few capped block reads as possible, all sent in one datagram |
 | Remote gamepad | Holds its bitmask until a later message changes it, and RetroArch reads at most one remote message per poll | A message is sent only when a button changes, and a combo drains one poll per changed button |
 | Instances | A second RetroArch refuses to come up while one is running | One worker owns one emulator; dispose before booting the next |
+| `LOAD_STATE` aftermath | A state load reinitialises the video, input, and audio drivers, and that reinitialisation sometimes ends the process | Resets replace the emulator and restore the SAME pinned boot blob, so a dead emulator never reaches the run |
 | Launch race | A launch can come up without a run loop, so the process lives and answers nothing. Never observed mid-run | Bounded relaunch, six attempts |
 | macOS state restoration | After an unclean exit AppKit blocks every later launch inside `-[NSApplication _reopenWindowsAsNecessaryIncludingRestorableState:]`, before RetroArch runs any of its own code | The worker deletes the saved state before each launch and names `defaults write <bundle-id> ApplePersistenceIgnoreState -bool YES` in the failure message |
 | macOS App Nap | A windowless background application is throttled, which stalls frame advance for seconds at a time mid-run | The failure message names `defaults write <bundle-id> NSAppSleepDisabled -bool YES` |
@@ -216,15 +217,23 @@ RetroArch is not an API, so each of these is a measurement against the real bina
 
 Libretro cores take no seed, so `init(seed)` cannot rebuild a run the way a seeded environment can. Instead the worker pins a boot state — pause, `RESET`, `bootFrames` fixed advances, save state — and `init` restores it. Every later transition is an explicit, counted frame advance from that state, so the input log plus the boot state is the complete determinism key. The seed is recorded and reported so run artifacts keep one shape, but it is nominal.
 
-`bootFrames` is a real per-game knob, because a core reset does not clear work RAM: until the game finishes its own initialisation, the boot state inherits whatever the launch race produced. Measured on gambatte with Libbet, over 21 evidence snapshots compared between two separately launched emulators:
+The result of that procedure is saved once, and every reset restores the save. Re-running the reset instead is not equivalent: a core reset does not clear video memory or the picture-processing state, so a second reset lands the title-screen animation at a phase that depends on the run before it. Measured over 41 evidence snapshots between two separately launched emulators, re-running the reset reproduced work RAM 40 times and the screen twice, while restoring the pinned save reproduced work RAM every time.
 
-| `bootFrames` | Snapshots identical across processes |
-|---|---|
-| 60 | 20 of 21 |
-| **180** | **21 of 21** |
-| 420 | 3 of 21 (the title-screen animation is by then at a phase that depends on the residue) |
+`bootFrames` is a real per-game knob, because a core reset does not clear work RAM: until the game finishes its own initialisation, the boot state inherits whatever the launch race produced. Measured on gambatte with Libbet over 61 evidence snapshots between two separately launched emulators:
 
-No `saveBlobHash` is published. RetroArch compresses save states, and a compressed state is not a stable identity for a game position; the bytes were measured **not** equal between processes at the same instant. Checkpoints stay exact within one worker, which is all snapshot and restore need.
+| `bootFrames` | `engineState` snapshots identical | Screen snapshots identical |
+|---|---|---|
+| 60 | 20 of 21 | 20 of 21 |
+| **180** | **61 of 61** | 37 of 61 |
+| 300 | 61 of 61 | 37 of 61 |
+
+### What is published, and what is pinned
+
+Every milestone this adapter derives is `engine-state`. Screen evidence is published — the agent sees the screen, and `frameHash` and `frameState` travel with each snapshot — but no milestone is pinned to it unless the caller passes `screenMilestones: true`.
+
+That is a measurement, not caution. Two separately launched emulators reproduce every privileged channel at every one of 61 snapshots, and reproduce the screen for the first 37 before a fade drifts one animation step out of phase; the divergence starts at the same snapshot at `bootFrames` 180 and 300, so it is the game reading residue a core reset does not clear, not the boot length. A screen milestone would therefore pin a frame that an honest replay in a fresh process cannot reproduce. `screenMilestones` exists for cores and games where the same measurement comes out clean.
+
+No `saveBlobHash` is published either. RetroArch compresses save states, and a compressed state is not a stable identity for a game position; the bytes were measured **not** equal between processes at the same instant. Checkpoints stay exact within one worker, which is all snapshot and restore need.
 
 ### The cross-emulator proof
 

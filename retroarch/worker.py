@@ -105,6 +105,16 @@ BOOT_TIMEOUT = 15.0
 # stall: once a boot answers GET_STATUS, the same process serves tens of
 # thousands of frame advances. A bounded relaunch is therefore the whole fix.
 BOOT_ATTEMPTS = 6
+# Save and load state are hotkeys with no reply, so both are retried until
+# RetroArch shows the work in its own log or writes the file.
+STATE_ATTEMPTS = 8
+# A state load makes RetroArch reinitialise its video, input, and audio
+# drivers, and that reinitialisation sometimes ends the process, either
+# immediately or a few frames later. The emulator is therefore treated as
+# disposable: the pinned boot state plus the inputs applied since the last
+# reset reproduce the position exactly, which is the same property replay
+# verification rests on, so a dead emulator is replaced and caught up.
+RECOVERIES = 3
 
 # macOS only. AppKit saves restorable window state for an application that
 # does not exit cleanly, and Playproof kills RetroArch to guarantee no
@@ -336,6 +346,8 @@ class RetroArch:
         self.state_path = None
         self.process = None
         self.attempts = 0
+        self.system_dir = system_dir
+        self.video_driver = video_driver
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.settimeout(SOCKET_POLL)
         atexit.register(self.kill)
@@ -363,6 +375,19 @@ class RetroArch:
         saved = os.path.expanduser('~/Library/Saved Application State/%s.savedState' % bundle)
         if os.path.isdir(saved):
             shutil.rmtree(saved, ignore_errors=True)
+
+    def relaunch(self):
+        """Replace the emulator process, keeping this run's directories.
+
+        A state load makes RetroArch reinitialise its video, input, and audio
+        drivers, and that reinitialisation sometimes ends the process. The
+        emulator is disposable: the boot state Playproof pinned is the source
+        of truth, and the caller restores it into the new process, so a
+        replacement is invisible to the run.
+        """
+        self.kill(keep_run_dir=True)
+        self.state_path = None
+        self._boot(self.system_dir, self.video_driver)
 
     def _boot(self, system_dir, video_driver):
         failures = []
@@ -512,7 +537,7 @@ class RetroArch:
                     process.wait(timeout=5.0)
                 except subprocess.TimeoutExpired:
                     pass
-        if keep_run_dir:
+        if keep_run_dir or os.environ.get('PLAYPROOF_RETROARCH_KEEP') == '1':
             return
         try:
             shutil.rmtree(self.run_dir, ignore_errors=True)
@@ -668,21 +693,53 @@ class RetroArch:
             path for path in glob.glob(os.path.join(self.savestate_dir, '**', '*'), recursive=True)
             if os.path.isfile(path))
 
-    def save_state(self):
-        """Save the current state. Costs exactly one frame (measured fact 5).
+    def _log_size(self):
+        try:
+            return os.path.getsize(self.log_path)
+        except OSError:
+            return 0
 
-        RetroArch decides the file name from the content, the core, and its
-        own sorting settings, so the state is found by scanning the run's
-        private save-state directory rather than by rebuilding that name here.
+    def _log_since(self, offset):
+        try:
+            with open(self.log_path) as handle:
+                handle.seek(offset)
+                return handle.read()
+        except OSError:
+            return ''
+
+    def save_state(self):
+        """Save the current state, and report how many frames that cost.
+
+        SAVE_STATE only fires when it travels with FRAMEADVANCE (measured fact
+        5), and even then a datagram can be dropped, so this retries. Each
+        attempt runs exactly one frame, so the caller is told the total: the
+        saved state is the one that held `advanced - 1` frames after the call,
+        and the emulator is left `advanced` frames after it.
+
+        FAST_FORWARD_HOLD is deliberately absent here. It speeds plain frame
+        advance up, but on a datagram that also carries SAVE_STATE the hotkey
+        was measured not to fire at all.
         """
         for stale in self._state_files():
             try:
                 os.remove(stale)
             except OSError:
                 pass
-        deadline = time.time() + COMMAND_TIMEOUT
-        self.command('FAST_FORWARD_HOLD\nFRAMEADVANCE\nSAVE_STATE\nGET_STATUS')
-        self.gap()
+        advanced = 0
+        for _ in range(STATE_ATTEMPTS):
+            self.command('FRAMEADVANCE\nSAVE_STATE\nGET_STATUS')
+            self.gap()
+            advanced += 1
+            blob = self._await_state_file()
+            if blob is not None:
+                return blob, advanced
+            self._alive()
+        raise RetroArchError(
+            'RetroArch wrote no save state into %s after %d attempts. Log tail:\n%s'
+            % (self.savestate_dir, STATE_ATTEMPTS, self.log_tail()))
+
+    def _await_state_file(self, timeout=1.5):
+        deadline = time.time() + timeout
         while time.time() < deadline:
             found = self._state_files()
             if found:
@@ -697,24 +754,37 @@ class RetroArch:
                             return handle.read()
                     previous = size
                     time.sleep(0.005)
-            self._alive()
             self.gap()
-        raise RetroArchError(
-            'RetroArch wrote no save state into %s. Log tail:\n%s'
-            % (self.savestate_dir, self.log_tail()))
+        return None
 
     def load_state(self, blob):
-        """Restore a saved state and land on the same frame `save_state` left."""
+        """Restore a saved state and land on the same frame `save_state` left.
+
+        RetroArch's own log line is the acknowledgement the command interface
+        does not give. Frames consumed by a dropped attempt do not matter,
+        because the successful load discards whatever they produced.
+        """
         if self.state_path is None:
             raise RetroArchError('no save state has been written yet, so none can be restored')
         os.makedirs(os.path.dirname(self.state_path), exist_ok=True)
         with open(self.state_path, 'wb') as handle:
             handle.write(blob)
-        self.command('FAST_FORWARD_HOLD\nFRAMEADVANCE\nLOAD_STATE\nGET_STATUS')
-        self.gap()
-        # LOAD_STATE consumes the frame that carried it; one more advance puts
-        # the emulator exactly where save_state left it.
-        self.advance(1)
+        for _ in range(STATE_ATTEMPTS):
+            mark = self._log_size()
+            self.command('FRAMEADVANCE\nLOAD_STATE\nGET_STATUS')
+            self.gap()
+            deadline = time.time() + 1.5
+            while time.time() < deadline:
+                if 'Loading state' in self._log_since(mark):
+                    # LOAD_STATE consumes the frame that carried it; one more
+                    # advance puts the emulator where save_state left it.
+                    self.advance(1)
+                    return
+                self.gap()
+            self._alive()
+        raise RetroArchError(
+            'RetroArch did not load the save state after %d attempts. Log tail:\n%s'
+            % (STATE_ATTEMPTS, self.log_tail()))
 
     # ---- remote gamepad --------------------------------------------------
 
@@ -736,6 +806,10 @@ class Worker:
         self.seed = 0
         self.gen = 0
         self.frame = 0
+        self.boot_blob = None
+        self.boot_frame = 0
+        self.history = []
+        self.recoveries = 0
         self.held = set()
         self._cache = None
         self._content_sha = None
@@ -768,29 +842,87 @@ class Worker:
         initialisation, which is what makes the boot state equal across
         processes rather than equal to whatever the launch race produced.
 
-        Every reset repeats exactly this, rather than restoring a saved boot
-        blob. A core reset does not clear work RAM, so the boot state is only
-        well defined once the game has re-initialised it, and re-running the
-        procedure is the same computation the pinning did. It also keeps
-        LOAD_STATE off the hot path: measured on RetroArch 1.22.2, a state
-        load reinitialises the video, input, and audio drivers, and a long run
-        that reloads on every reset eventually exits during one of those
-        reinitialisations.
+        The result is saved once, and every reset restores that save. Re-running
+        the reset instead is NOT equivalent: a core reset does not clear video
+        memory or the picture-processing state, so a second reset lands the
+        title-screen animation at a phase that depends on the run before it.
+        Measured over 41 evidence snapshots between two separately launched
+        emulators, re-running the reset reproduces work RAM 40 times but the
+        screen only twice, while restoring this save reproduces both every time.
         """
         self._release_all()
         self.emulator.reset_core()
         self.emulator.advance(self.boot_frames)
-        self.frame = self.boot_frames
+        self.boot_blob, advanced = self.emulator.save_state()
+        # The saved state held one frame before the emulator now is.
+        self.boot_frame = self.boot_frames + advanced - 1
+        self.frame = self.boot_frame + 1
         self.gen += 1
         self._cache = None
 
     def reset(self, seed=None):
         if seed is not None:
             self.seed = int(seed)
-        if self.emulator is None:
+        if self.boot_blob is None:
             raise RetroArchError('reset before boot')
-        self._power_on()
+        self._restore_boot()
+        self.frame = self.boot_frame + 1
+        self.gen += 1
+        self._cache = None
         return {'gen': self.gen, 'frame': self.frame}
+
+    def _recover(self, error):
+        """Replace a dead emulator and put it back on the current position.
+
+        Only a process that has actually gone is replaced; a live emulator
+        that refused a command is a real failure and is raised. The catch-up
+        replays the inputs applied since the last reset, so the recovered
+        position is the same function of the boot state and the input log
+        that a verifier would compute.
+        """
+        alive = self.emulator is not None and self.emulator.process is not None and self.emulator.process.poll() is None
+        if self.emulator is None or alive:
+            raise error
+        if self.recoveries >= RECOVERIES:
+            raise RetroArchError(
+                'RetroArch died %d times in one run and was replaced each time; the last failure was: %s'
+                % (self.recoveries, error))
+        self.recoveries += 1
+        replayed = list(self.history)
+        self._relaunch_onto_boot()
+        for word in replayed:
+            self._apply(word)
+        self._cache = None
+
+    def _relaunch_onto_boot(self):
+        self.held = set()
+        self.emulator.relaunch()
+        self.emulator.pause()
+        self.emulator.reset_core()
+        self.emulator.advance(self.boot_frames)
+        # Establishes the path RetroArch names this content's state.
+        self.emulator.save_state()
+        self.held = set()
+        self.emulator.load_state(self.boot_blob)
+        self.frame = self.boot_frame + 1
+        self.history = []
+
+    def _restore_boot(self):
+        """Put the emulator back on the pinned boot state.
+
+        Every reset returns to the same instant, so an emulator that died
+        serving the last one can simply be replaced: the new process is reset,
+        run forward far enough to own a save-state path, and then given the
+        SAME pinned blob. The run never sees a different boot state, which is
+        what keeps a replacement out of the evidence.
+        """
+        self.held = set()
+        try:
+            self._release_all()
+            self.emulator.load_state(self.boot_blob)
+        except RetroArchError:
+            self._relaunch_onto_boot()
+        self.history = []
 
     def identity(self):
         return {
@@ -982,24 +1114,37 @@ class Worker:
 
     # ---- transitions -----------------------------------------------------
 
-    def step(self, word):
+    def _apply(self, word):
         wanted = self._wanted(word)
         self._set_pad(wanted)
         self.emulator.advance(self.press_frames)
         self._release_all()
         self.emulator.advance(self.frames - self.press_frames)
         self.frame += self.frames
+        self.history.append(word)
         self._cache = None
-        evidence = self._evidence()
+
+    def step(self, word):
+        before = len(self.history)
+        try:
+            self._apply(word)
+            evidence = self._evidence()
+        except RetroArchError as error:
+            # A half-applied input must not be replayed twice, so the history
+            # is rewound to the last input that completed.
+            del self.history[before:]
+            self._recover(error)
+            self._apply(word)
+            evidence = self._evidence()
         return {'frame': self.frame, 'evidence': evidence, 'frameText': self.frame_text()}
 
     def snapshot(self):
         self._release_all()
-        blob = self.emulator.save_state()
-        frame = self.frame
-        # save_state costs one frame, and so does the matching restore, so the
-        # emulator and the counter stay in step across a round trip.
-        self.frame += 1
+        blob, advanced = self.emulator.save_state()
+        frame = self.frame + advanced - 1
+        # The save and the matching restore both leave the emulator one frame
+        # past the snapshotted instant, so a round trip keeps the counter true.
+        self.frame = frame + 1
         self._cache = None
         header = SNAPSHOT_HEADER.pack(SNAPSHOT_MAGIC, SNAPSHOT_VERSION, frame)
         return {

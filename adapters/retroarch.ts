@@ -84,6 +84,14 @@ export interface RetroArchOptions {
   reference: string[]
   /** Channel whose first change anchors the screen-frame milestones. */
   anchorChannelId?: string
+  /**
+   * Pin screen-frame milestones as well as engine-state ones. Off by default:
+   * a milestone is only honest when a verifier in a separate process
+   * reproduces it, and screen evidence has to be measured per core and per
+   * game before it can carry that weight. See the adapter docs for the
+   * measurement on gambatte.
+   */
+  screenMilestones?: boolean
 }
 
 export interface RetroArch {
@@ -157,6 +165,7 @@ export function channelMarks(
   channels: RetroArchChannel[],
   baseline: Record<string, number>,
   anchorChannelId?: string,
+  screenMilestones = false,
 ): MarkPoint[] {
   if (channels.length === 0) throw new Error('no evidence channels — nothing to build a contract from')
   const anchor = anchorChannelId ? channels.find((c) => c.id === anchorChannelId) : channels[0]
@@ -182,6 +191,7 @@ export function channelMarks(
       value: e.engineState?.[channel.id] ?? 0,
     }),
   }))
+  if (!screenMilestones) return marks
   marks.push(
     {
       when: changed(anchor),
@@ -283,7 +293,7 @@ export function makeRetroArch(options: RetroArchOptions): RetroArch {
       game,
       seed,
       options.reference,
-      channelMarks(options.channels, baseline, options.anchorChannelId),
+      channelMarks(options.channels, baseline, options.anchorChannelId, options.screenMilestones ?? false),
     )
     return {
       game,
