@@ -238,6 +238,50 @@ One Python worker covers every console [stable-retro](https://github.com/Farama-
 
 `Airstriker-Genesis` ships inside stable-retro under a free licence, so the adapter and its test run on a clean CI machine with no ROM secret. Bring other legally obtained ROMs in with `python -m retro.import <dir>` and supply a reference playthrough through `options.reference`.
 
+### Atari through ALE
+
+```ts
+import { makeAle } from '@tangle-network/playproof/adapters/ale'
+
+const { game, contract, reference, inputs, dispose } = makeAle({ game: 'breakout' })
+```
+
+The [Arcade Learning Environment](https://github.com/Farama-Foundation/Arcade-Learning-Environment) is the Atari 2600 substrate the reinforcement-learning literature reports on, so a Playproof score on one of these ROMs is directly comparable with published baselines. The adapter drives `ALEInterface` rather than a Gymnasium wrapper, which keeps the determinism knobs explicit: Playproof sets the seed, sets the sticky-action probability to 0, and applies the frame repeat itself.
+
+- **Inputs.** The game's minimal action set, as ALE `Action` names: `NOOP`, `FIRE`, `UP`, `RIGHT`, `LEFT`, `DOWN`, `UPRIGHT`, and the rest. Unknown words are no-ops. Each input is held for `frames` emulator frames, four by default.
+- **Observation.** An ASCII downsample of the screen plus a one-line score, lives, and frame summary.
+- **Evidence.** Cumulative score, lives, the emulator frame counters, and the RAM bytes the caller names as `channels`. The 128-byte RAM page is never published whole. Joined by the rendered-frame hash and the serialized emulator-state hash.
+- **Verification.** `replay`. Screens, RAM, counters, and the serialized `ALEState` were measured byte-identical across separate worker processes at all 211 snapshots of the Breakout reference, so a save-file milestone is honest here even though the same tier is not honest on stable-retro. See [Execution adapters](docs/adapters.md) for the numbers.
+
+`ale-py` bundles the Atari ROM set, so the adapter and its test run on a clean CI machine with no download and no secret. The bundled reference plays Breakout; supply a reference playthrough through `options.reference` for any of the other ROMs.
+
+### Any Gymnasium environment
+
+```ts
+import { makeGymnasium } from '@tangle-network/playproof/adapters/gymnasium'
+
+const { game, contract, reference, inputs, dispose } = makeGymnasium({
+  envId: 'CartPole-v1',
+})
+```
+
+One Python worker turns any registered [Gymnasium](https://gymnasium.farama.org) environment with a `Discrete` action space into a `Game`: classic control, toy text, procedurally generated suites, and text environments, including third-party environments that register with Gymnasium. `MultiDiscrete`, `MultiBinary`, and `Box` action spaces are refused at boot with a clear message.
+
+- **Inputs.** One word per turn: `NOOP` plus one name per action. Names come from `get_action_meanings()` when the environment exposes it, otherwise they are `a0` … `a{n-1}`. A discrete environment has no guaranteed idle action, so `NOOP` and any unknown word do not step the environment at all: the state is unchanged, because an agent typo is not a cheat.
+- **Observation.** The `ansi` render for text environments, the text itself for text observations, and a labelled number list otherwise, plus a step and reward summary line.
+- **Evidence.** Cumulative reward, step count, termination flags, and the numeric entries of the environment's `info` dictionary, joined by the SHA-256 of the whole observation and a bounded numeric projection of it. Playproof evidence is integer-only, so reward and numeric `info` entries are multiplied by 1000 and rounded: reward 1.0 is `cumulativeReward` 1000.
+- **The honest limit.** A generic environment has **no privileged channel the agent cannot author**. Reward, `info`, and the observation are exactly what the environment hands the policy, so this tier is reward-derived, not hidden, and it is weaker than the RAM-backed score an emulator adapter reads. Verification still holds because it is replay: the verifier re-executes the environment from the seed and the input log and recomputes every milestone.
+- **Verification.** `replay`, and only for environments where `reset(seed=…)` fixes the whole trajectory. `CartPole-v1` and `FrozenLake-v1` with `is_slippery: false` do, and the gate measures it across separate worker processes. An environment that reads a clock, a global RNG, or external state is not replay-verifiable and must not be given a contract.
+
+Both bundled reference playthroughs — a scripted balancing run on `CartPole-v1` and the shortest winning path on the `FrozenLake-v1` 4x4 map — use environments that ship inside Gymnasium, so the gate runs on a clean machine with no asset:
+
+```bash
+pip install "gymnasium[toy-text]"
+PLAYPROOF_REQUIRE_GYM=1 pnpm test:gym
+```
+
+For any other environment, supply a reference playthrough through `options.reference`.
+
 ### Steam and Xbox
 
 ```ts
@@ -302,13 +346,30 @@ PLAYPROOF_PYTHON=python \
 pnpm test:pyboy
 ```
 
-The stable-retro gate needs no ROM, because the emulator ships one:
+The stable-retro and ALE gates need no ROM, because both emulators ship one:
 
 ```bash
 pip install stable-retro
 PLAYPROOF_REQUIRE_RETRO=1 pnpm test:retro
+
+pip install ale-py
+PLAYPROOF_REQUIRE_ALE=1 pnpm test:ale
 ```
 
 ## License
 
 Apache-2.0.
+
+## Citation
+
+If you use Playproof in your work, please cite it:
+
+```bibtex
+@software{stone_yaish_playproof,
+  author = {Stone, Drew and Yaish, Aviv},
+  title  = {Playproof},
+  url    = {https://github.com/tangle-network/playproof}
+}
+```
+
+Machine-readable citation metadata is available in [`CITATION.cff`](CITATION.cff).

@@ -19,9 +19,11 @@ const forbiddenProductionText = [
 ]
 const productionPrefixes = [
   'adapters/',
+  'ale/',
   'desktop/',
   'drivers/',
   'exploration/',
+  'gym/',
   'native/',
   'platforms/',
   'pyboy/',

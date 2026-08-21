@@ -1,6 +1,6 @@
 {
   "name": "@tangle-network/playproof",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Turn games into verifiable, cost-aware benchmarks for any agent.",
   "license": "Apache-2.0",
   "type": "module",
@@ -85,6 +85,22 @@
       "types": "./dist/adapters/pyboy-tetris.d.ts",
       "import": "./dist/adapters/pyboy-tetris.js"
     },
+    "./adapters/ale-rpc": {
+      "types": "./dist/adapters/ale-rpc.d.ts",
+      "import": "./dist/adapters/ale-rpc.js"
+    },
+    "./adapters/ale": {
+      "types": "./dist/adapters/ale.d.ts",
+      "import": "./dist/adapters/ale.js"
+    },
+    "./adapters/gym-rpc": {
+      "types": "./dist/adapters/gym-rpc.d.ts",
+      "import": "./dist/adapters/gym-rpc.js"
+    },
+    "./adapters/gymnasium": {
+      "types": "./dist/adapters/gymnasium.d.ts",
+      "import": "./dist/adapters/gymnasium.js"
+    },
     "./adapters/retro-rpc": {
       "types": "./dist/adapters/retro-rpc.d.ts",
       "import": "./dist/adapters/retro-rpc.js"
@@ -110,6 +126,8 @@
     "test": "tsx playproof.test.mts && tsx episode.test.mts && tsx platform.test.mts && tsx desktop-platforms.test.mts && tsx drivers.test.mts && tsx campaign.test.mts",
     "test:pyboy": "tsx pyboy-tetris.test.mts",
     "test:retro": "tsx stable-retro.test.mts",
+    "test:ale": "tsx ale.test.mts",
+    "test:gym": "tsx gymnasium.test.mts",
     "test:pyboy-libbet": "tsx pyboy-libbet.test.mts",
     "verify:package": "node scripts/verify-package.mjs",
     "ci": "pnpm check:boundary && pnpm typecheck && pnpm test && pnpm build && pnpm verify:package",
