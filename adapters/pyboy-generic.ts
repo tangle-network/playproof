@@ -151,6 +151,11 @@ export function autoMarks(doc: DiscoveryDoc, confirmedChannelId?: string): MarkP
 }
 
 export function makePyBoyGeneric(rom: string, doc: DiscoveryDoc, opts: PyBoyGenericOptions = {}): PyBoyGeneric {
+  // A scale with no image channel is a silent no-op: the worker range-checks
+  // it and then renders nothing. Say so instead of ignoring the caller.
+  if (opts.screenScale !== undefined && opts.screenImage !== true) {
+    throw new Error('screenScale needs screenImage: true; the screen is only published when the image channel is on')
+  }
   const rpc = new PyBoyRpc()
   const bootOpts = doc.exploration.preamble === 'tetris-hand' ? { preamble: 'tetris-hand' } : {}
   const booted = rpc.boot(rom, 'generic', {

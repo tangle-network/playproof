@@ -48,7 +48,7 @@ import zlib
 warnings.filterwarnings('ignore')
 
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'pyshared'))
-from png import encode_png
+from playproof_png import encode_png
 
 # Checkpoint container. The libretro core blob alone cannot rewind the worker
 # frame counter, so the counter travels with it and restore is exact.
@@ -279,9 +279,9 @@ class Worker:
         """The rendered screen as a PNG, or None when the boot did not ask.
 
         This is the SAME observation buffer `_evidence` hashes into
-        `frameHash`. The worker captured it for verification already;
-        publishing it costs one encode and gives the agent the picture a human
-        player sees.
+        `frameHash`, so the picture the agent sees is the screen the verifier
+        checks, including immediately after a checkpoint restore. The cost is
+        one encode per emulator instant, cached until the state moves.
         """
         if not self.screen_image or self.obs is None:
             return None

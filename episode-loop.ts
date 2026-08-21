@@ -10,7 +10,7 @@
  * This module is internal. It is not exported from `index.ts`.
  */
 import { attestRun, inputStatistics, MilestoneTracker } from './attestation'
-import { InputLog, observationOf, type Game } from './runtime'
+import { InputLog, observationOf, observationTextOf, type Game } from './runtime'
 import type { MilestoneContract } from './schema'
 import type {
   AgentDecisionContext,
@@ -93,8 +93,10 @@ export function applyInput<S>(
     rollout.observed.push(id)
     rollout.milestones.push({ id, turn: rollout.turns + 1, costUsd: round4(rollout.spent) })
   }
-  // History keeps the observation text only; see AgentHistoryEntry.
-  rollout.history.push({ input, frame: observationOf(game, rollout.state).text })
+  // History keeps the observation text only; see AgentHistoryEntry. It reads
+  // the text alone so that appending a row, on a live turn or on a ledger
+  // replay, cannot fail on a bound that governs pixels nobody records.
+  rollout.history.push({ input, frame: observationTextOf(game, rollout.state) })
   if (rollout.historyLimit !== undefined && rollout.history.length > rollout.historyLimit) {
     rollout.history.splice(0, rollout.history.length - rollout.historyLimit)
   }
@@ -138,7 +140,7 @@ export async function advanceRollout<S>(
       spentUsd: rollout.spent,
       remainingBudgetUsd: Math.max(0, limits.budgetUsd - rollout.spent),
       ...(limits.guidance === undefined ? {} : { guidance: limits.guidance }),
-      observation: Object.freeze(observation),
+      observation,
       ...(limits.signal === undefined ? {} : { signal: limits.signal }),
     }
     // A driver receives an immutable snapshot, never the harness's mutable log.

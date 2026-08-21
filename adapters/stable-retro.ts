@@ -210,6 +210,12 @@ export function makeStableRetro(options: StableRetroOptions): StableRetro {
   if (reference.schemaVersion !== 1) throw new Error(`unsupported reference schemaVersion ${reference.schemaVersion}`)
   if (reference.inputs.length === 0) throw new Error(`reference for ${options.game} has no inputs`)
 
+  // A scale with no image channel is a silent no-op: the worker range-checks
+  // it and then renders nothing. Say so instead of ignoring the caller.
+  if (options.screenScale !== undefined && options.screenImage !== true) {
+    throw new Error('screenScale needs screenImage: true; the screen is only published when the image channel is on')
+  }
+
   const seed = options.seed ?? reference.seed
   const frameskip = options.frames ?? reference.frames
   const rpc = new RetroRpc(options.python)

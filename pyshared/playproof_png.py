@@ -1,5 +1,10 @@
 """PNG encoder shared by every Playproof Python worker.
 
+The module is named `playproof_png` rather than `png`: the workers put this
+directory on `sys.path`, and `png` is taken by a widely installed package, so a
+plain name would let an unrelated dependency in the caller's environment shadow
+this file and break every worker at import time.
+
 Playproof adds no image dependency. Pillow is absent from the CI virtual
 environments (the PyBoy job logs `Missing dependency "Pillow"`), and a
 benchmark harness that gains an imaging stack to show an agent a game screen
@@ -41,7 +46,10 @@ def encode_png(width, height, channels, pixels, level=9):
     if width <= 0 or height <= 0:
         raise ValueError('image dimensions must be positive, got %dx%d' % (width, height))
     stride = width * channels
-    view = memoryview(pixels)
+    # cast('B') so `len` counts BYTES for any buffer, not items: a caller that
+    # passes a typed or multi-dimensional buffer must fail the size check
+    # rather than slice it by the wrong unit.
+    view = memoryview(pixels).cast('B')
     if len(view) != height * stride:
         raise ValueError('pixel buffer is %d bytes, expected %d' % (len(view), height * stride))
     raw = bytearray(height * (stride + 1))

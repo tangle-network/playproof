@@ -1,7 +1,7 @@
 /**
  * Enough of a PNG reader for the adapter gates to prove a worker wrote a real
- * image: the signature, the declared size, the filter byte `pyshared/png.py`
- * documents, and how many distinct pixels the picture holds.
+ * image: the signature, the declared size, the filter byte
+ * `pyshared/playproof_png.py` documents, and how many distinct pixels the picture holds.
  *
  * A constant-colour result means the encoder ran over an empty buffer and the
  * agent is being shown nothing, which is the failure this exists to catch.
@@ -49,7 +49,7 @@ export function decodePng(bytes: Buffer): DecodedPng {
   const pixels = Buffer.alloc(height * stride)
   for (let row = 0; row < height; row++) {
     const start = row * (stride + 1)
-    // pyshared/png.py documents filter 0 (None) on every scanline.
+    // pyshared/playproof_png.py documents filter 0 (None) on every scanline.
     assert.equal(raw[start], 0, `row ${row} is not filter 0`)
     raw.copy(pixels, row * stride, start + 1, start + 1 + stride)
     for (let column = 0; column < stride; column += channels) {

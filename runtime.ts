@@ -113,12 +113,15 @@ const MAGIC: Record<ObservationImage['mediaType'], readonly number[]> = {
  * channel out of the agent's view.
  */
 export function observationOf<S>(game: Game<S>, state: S): Observation {
-  if (game.observe === undefined) return { text: game.frame(state) }
+  if (game.observe === undefined) return Object.freeze({ text: game.frame(state) })
   const observed = game.observe(state)
   if (typeof observed?.text !== 'string') {
     throw new Error(`game ${game.id} observe() returned no text`)
   }
-  if (observed.images === undefined) return { text: observed.text }
+  if (observed.images === undefined) return Object.freeze({ text: observed.text })
+  if (!Array.isArray(observed.images)) {
+    throw new Error(`game ${game.id} observe() returned images that are not an array`)
+  }
   const images = [...observed.images]
   if (images.length > MAX_OBSERVATION_IMAGES) {
     throw new Error(
@@ -133,15 +136,39 @@ export function observationOf<S>(game: Game<S>, state: S): Observation {
         `game ${game.id} observation images total ${total} bytes, over the ${MAX_OBSERVATION_TOTAL_IMAGE_BYTES} per turn`,
       )
     }
+    Object.freeze(image)
   }
-  return { text: observed.text, images }
+  // Frozen through: a driver holds a snapshot of the turn, never a handle it
+  // can write back into the harness.
+  return Object.freeze({ text: observed.text, images: Object.freeze(images) })
+}
+
+/**
+ * Just the text of an observation, with the same default applied.
+ *
+ * The trajectory history and the campaign segment report are text records, and
+ * neither of them shows an image to anybody. They read the observation through
+ * this function so that appending a history row cannot fail on an image bound,
+ * and so that a game whose `observe()` text differs from `frame()` still writes
+ * one consistent text everywhere.
+ */
+export function observationTextOf<S>(game: Game<S>, state: S): string {
+  if (game.observe === undefined) return game.frame(state)
+  const text = game.observe(state).text
+  if (typeof text !== 'string') throw new Error(`game ${game.id} observe() returned no text`)
+  return text
 }
 
 /** Validate one image against the bounds and return its decoded byte count. */
 function checkObservationImage(gameId: string, index: number, image: ObservationImage): number {
   const where = `game ${gameId} observation image ${index}`
-  const magic = MAGIC[image.mediaType]
-  if (magic === undefined) throw new Error(`${where} has unsupported mediaType ${String(image.mediaType)}`)
+  // Own-property lookup only: `mediaType` arrives as JSON from a worker, and an
+  // inherited key such as `toString` would otherwise pass the guard and fail
+  // later with a type error instead of naming the real problem.
+  if (!Object.hasOwn(MAGIC, image.mediaType)) {
+    throw new Error(`${where} has unsupported mediaType ${String(image.mediaType)}`)
+  }
+  const magic = MAGIC[image.mediaType]!
   for (const side of ['width', 'height'] as const) {
     const value = image[side]
     if (!Number.isInteger(value) || value <= 0 || value > MAX_OBSERVATION_IMAGE_DIMENSION) {
@@ -150,9 +177,17 @@ function checkObservationImage(gameId: string, index: number, image: Observation
       )
     }
   }
+  // A label is agent-visible text that a driver puts straight into a prompt, so
+  // it is bounded and stripped of every control and formatting character, not
+  // just newlines: an escape sequence or a bidi override is prompt injection
+  // dressed as a caption.
   if (image.label !== undefined
-    && (image.label.length > MAX_OBSERVATION_IMAGE_LABEL_CHARS || /[\r\n\0]/u.test(image.label))) {
-    throw new Error(`${where} has a label over ${MAX_OBSERVATION_IMAGE_LABEL_CHARS} characters or with a control character`)
+    && (typeof image.label !== 'string'
+      || image.label.length > MAX_OBSERVATION_IMAGE_LABEL_CHARS
+      || /\p{C}/u.test(image.label))) {
+    throw new Error(
+      `${where} label must be a string of at most ${MAX_OBSERVATION_IMAGE_LABEL_CHARS} characters with no control character`,
+    )
   }
   if (typeof image.base64 !== 'string' || image.base64.length === 0 || image.base64.length % 4 !== 0
     || !BASE64.test(image.base64)) {

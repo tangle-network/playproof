@@ -38,7 +38,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'pyshared'))
-from png import encode_png
+from playproof_png import encode_png
 
 GAME_WIRING = {}
 WRAM = (0xC000, 0xE000)
@@ -128,9 +128,10 @@ class Worker:
     def screen_rgb(self):
         """The rendered screen as a PNG, or None when the boot did not ask.
 
-        These are the SAME pixels `_evidence` hashes into `frameHash`. The
-        worker captured them for verification already; publishing them costs
-        one encode and gives the agent the picture a human player sees.
+        This reads the SAME pixels `_evidence` hashes into `frameHash`, so the
+        picture the agent sees is the screen the verifier checks. The cost is
+        one screen read and one encode per emulator instant, both cached until
+        the state moves.
         """
         if not self.screen_image:
             return None

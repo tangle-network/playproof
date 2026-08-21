@@ -49,6 +49,8 @@ BUTTONS = ('up', 'down', 'left', 'right', 'a', 'b', 'start', 'select')
 # constants keep the input log a complete determinism key (TAS doctrine).
 PRESS_FRAMES = 2
 SETTLE_FRAMES = 8
+# Frames the hand preamble advances after the last menu transition.
+PREAMBLE_SETTLE_FRAMES = 6
 
 
 def _bcd(byte):
@@ -131,10 +133,10 @@ def run_preamble(pyboy):
     advance({ST_SELECT_TYPE, ST_SELECT_LEVEL_A})
     advance({ST_SELECT_LEVEL_A})
     advance({ST_INGAME})
-    for frame in range(6):
-        # The preamble also ends on a rendered frame, so the first observation
-        # an agent sees is the screen and not an unwritten buffer.
-        pyboy.tick(1, frame == 5)
+    # The preamble also ends on a rendered frame, so the first observation an
+    # agent sees is the screen and not a buffer nothing has written.
+    for frame in range(PREAMBLE_SETTLE_FRAMES):
+        pyboy.tick(1, frame == PREAMBLE_SETTLE_FRAMES - 1)
 
 
 def well_grid(pyboy):

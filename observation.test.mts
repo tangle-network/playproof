@@ -18,6 +18,7 @@ import { playEpisode, type AgentDecisionContext, type AgentDriver } from './epis
 import {
   logFrom,
   observationOf,
+  observationTextOf,
   MAX_OBSERVATION_IMAGE_BYTES,
   MAX_OBSERVATION_IMAGES,
   MAX_OBSERVATION_IMAGE_DIMENSION,
@@ -166,8 +167,24 @@ const textOnly = roomGame(false)
   reject({ ...ok, mediaType: 'image/gif' }, /unsupported mediaType/u)
   reject({ ...ok, base64: 'not base64!!' }, /not canonical base64/u)
   reject({ ...ok, base64: Buffer.from('plain text, not an image').toString('base64') }, /magic bytes/u)
-  reject({ ...ok, label: 'x'.repeat(MAX_OBSERVATION_IMAGE_LABEL_CHARS + 1) }, /label over 200 characters/u)
-  reject({ ...ok, label: 'two\nlines' }, /control character/u)
+  reject({ ...ok, label: 'x'.repeat(MAX_OBSERVATION_IMAGE_LABEL_CHARS + 1) }, /at most 200 characters/u)
+  reject({ ...ok, label: 'two\nlines' }, /no control character/u)
+  // A caption reaches a prompt verbatim, so an escape sequence or a bidi
+  // override is rejected as firmly as a newline, and a non-string is not a
+  // caption at all.
+  reject({ ...ok, label: 'colour\u001b[31mme' }, /no control character/u)
+  reject({ ...ok, label: 'flip\u202Eme' }, /no control character/u)
+  reject({ ...ok, label: 12_345 }, /label must be a string/u)
+  // An inherited key is not a media type. Without an own-property check this
+  // failed later with a type error instead of naming the real problem.
+  reject({ ...ok, mediaType: 'toString' }, /unsupported mediaType/u)
+  reject({ ...ok, mediaType: '__proto__' }, /unsupported mediaType/u)
+
+  const notAnArray: Game<RoomState> = {
+    ...textOnly,
+    observe: (state) => ({ text: textOnly.frame(state), images: null as unknown as ObservationImage[] }),
+  }
+  assert.throws(() => observationOf(notAnArray, notAnArray.init(0)), /images that are not an array/u)
 
   const many: Game<RoomState> = {
     ...textOnly,
@@ -198,6 +215,29 @@ const textOnly = roomGame(false)
     playEpisode(oversized, roomContract(textOnly), recordingDriver([]), 1, 3, 0),
     /over the 1048576 cap/u,
   )
+}
+
+{
+  // The observation a driver receives is a frozen snapshot, all the way down,
+  // so a driver cannot write back into the turn the harness is running.
+  const frozen = observationOf(withImages, withImages.init(0))
+  assert.ok(Object.isFrozen(frozen))
+  assert.ok(Object.isFrozen(frozen.images))
+  assert.ok(Object.isFrozen(frozen.images![0]))
+
+  // The text accessor applies the same default and never touches the images,
+  // so a history row cannot fail on a bound that governs pixels nobody records.
+  const state = textOnly.init(0)
+  assert.equal(observationTextOf(textOnly, state), textOnly.frame(state))
+  assert.equal(observationTextOf(withImages, state), observationOf(withImages, state).text)
+  const oversizedImage: Game<RoomState> = {
+    ...textOnly,
+    observe: (s) => ({
+      text: textOnly.frame(s),
+      images: [{ mediaType: 'image/png', base64: pngOfSize(MAX_OBSERVATION_IMAGE_BYTES + 3), width: 8, height: 8 }],
+    }),
+  }
+  assert.equal(observationTextOf(oversizedImage, state), textOnly.frame(state))
 }
 
 {

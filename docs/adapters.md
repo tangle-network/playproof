@@ -32,7 +32,7 @@ It is off by default on every adapter, so a run that does not ask for it sends t
 
 | Adapter | Produces pixels? | How | Upscale |
 |---|---|---|---|
-| `adapters/ale` | Yes | `getScreenRGB()`, the same buffer `frameHash` covers, encoded by `pyshared/png.py` | `screenScale`, 1..8; native is 160x210 |
+| `adapters/ale` | Yes | `getScreenRGB()`, the same buffer `frameHash` covers, encoded by `pyshared/playproof_png.py` | `screenScale`, 1..8; native is 160x210 |
 | `adapters/pyboy-generic` | Yes | `screen.ndarray`, the same buffer `frameHash` covers | `screenScale`, 1..8; native is 160x144 |
 | `adapters/stable-retro` | Yes | The environment observation, the same buffer `frameHash` covers | `screenScale`, 1..8 |
 | `adapters/retroarch` | Yes | RetroArch's own `SCREENSHOT` PNG, republished byte for byte | None; the worker has no array library |
@@ -42,7 +42,7 @@ It is off by default on every adapter, so a run that does not ask for it sends t
 
 **No image dependency was added, and none may be.**
 Pillow is absent from the CI environments — the PyBoy job logs `Missing dependency "Pillow"` — and a harness that grows an imaging stack to show a game screen has overpaid.
-`pyshared/png.py` encodes 8-bit grayscale, RGB, or RGBA with `zlib` and `struct`, filter 0 on every scanline.
+`pyshared/playproof_png.py` encodes 8-bit grayscale, RGB, or RGBA with `zlib` and `struct`, filter 0 on every scanline.
 Measured on an ale-py 0.12.1 Breakout frame: 518 bytes at the native 160x210 in 0.84 ms, and 2,383 bytes at a 3x upscale in 4.4 ms.
 
 **PyBoy needed a fix before it could show anything.**
@@ -226,11 +226,12 @@ Nothing in the adapter is environment-specific.
 Names come from `env.unwrapped.get_action_meanings()` when the environment exposes it, and are `a0` … `a{n-1}` otherwise.
 A discrete action space has no guaranteed idle action, so a no-op cannot be "repeat nothing" the way a console controller can.
 
-**No screen images.** These environments observe a vector or an `ansi` string, not a framebuffer, and an `rgb_array` render for the classic-control and toy-text families needs `pygame`.
-That is a new dependency for a picture of a cart and a pole, so this adapter publishes no observation image and this line records why.
 `NOOP` and every unknown word therefore do not call `env.step` at all: the environment is left exactly where it was.
 An agent typo is not a cheat, and it must not silently advance the episode either.
 An environment that names one of its own actions `NOOP`, as ALE does, keeps that real action.
+
+**No screen images.** These environments observe a vector or an `ansi` string, not a framebuffer, and an `rgb_array` render for the classic-control and toy-text families needs `pygame`.
+That is a new dependency for a picture of a cart and a pole, so this adapter publishes no observation image and this line records why.
 
 **Observation.** The `ansi` render when the environment advertises one, the observation itself when it is text, and a labelled number list otherwise, followed by a step and reward summary line.
 A toy-text `ansi` render marks the agent's own cell with a terminal colour escape and nothing else, so the worker converts the highlight to brackets before it strips the escapes; dropping them outright would delete the agent's position from the frame.

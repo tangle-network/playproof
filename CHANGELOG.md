@@ -22,6 +22,10 @@ All notable changes to Playproof are documented here.
 - One image is capped at 1 MiB decoded and 2048 px on either edge; a turn carries at most 4 images and 2 MiB in total. Media type is checked against the file's own magic bytes and base64 must be canonical.
 - 1 MiB is about 440x the largest real frame measured, and 2048 px is where model providers resize an image into their own tile grid, so pixels past it are re-encoded away while the harness still pays for the bytes.
 - A breach is a harness error that fails the turn. Nothing is silently truncated: a run whose observation quietly changed size is a run whose reported result cannot be reproduced.
+- An image `label` is agent-visible text that a driver puts straight into a prompt, so it must be a string, is bounded, and rejects every control and formatting character rather than only newlines. An escape sequence or a bidi override is prompt injection dressed as a caption.
+- The observation a driver receives is frozen through the images array and each image, so a driver holds a snapshot of the turn and never a handle back into the harness.
+- `observationTextOf(game, state)` applies the same default without validating pixels. The trajectory history and the campaign segment report read through it, so appending a text row cannot fail on a bound that governs pixels nobody records, on a live turn or on a ledger replay.
+- The ALE and PyBoy worker transports raise their per-line bound to 8 MiB, matching stable-retro. A legal 1 MiB image is about 1.4 MB of base64, so without this the transport would reject the line first and report a byte count instead of the cap the caller breached.
 
 ### Evidence boundary and replay
 
@@ -38,7 +42,7 @@ All notable changes to Playproof are documented here.
 
 - `adapters/ale`, `adapters/pyboy-generic`, and `adapters/stable-retro` take `screenImage` and `screenScale`, and publish the screen their worker already captured for `frameHash`. `adapters/retroarch` takes `screenImage` and republishes RetroArch's own `SCREENSHOT` PNG byte for byte.
 - Every one of them is off by default, so the byte cost of an existing run is unchanged.
-- `pyshared/png.py` encodes 8-bit grayscale, RGB, and RGBA with `zlib` and `struct`, filter 0 on every scanline. No image dependency was added: Pillow is absent from CI, and the RetroArch worker needs no encoder at all. Measured on an ale-py 0.12.1 Breakout frame: 518 bytes at the native 160x210 in 0.84 ms, and 2,383 bytes at a 3x upscale in 4.4 ms.
+- `pyshared/playproof_png.py` encodes 8-bit grayscale, RGB, and RGBA with `zlib` and `struct`, filter 0 on every scanline. No image dependency was added: Pillow is absent from CI, and the RetroArch worker needs no encoder at all. Measured on an ale-py 0.12.1 Breakout frame: 518 bytes at the native 160x210 in 0.84 ms, and 2,383 bytes at a 3x upscale in 4.4 ms.
 - `adapters/gymnasium` publishes no image and the docs say why: its environments observe a vector or an `ansi` string, and an `rgb_array` render for the classic-control and toy-text families needs `pygame`.
 - The bytes an agent sees are never the bytes a verifier recomputes. ALE and PyBoy hash the raw buffer rather than the encoded file, and the RetroArch evidence hash covers decoded pixels because RetroArch picks a PNG filter per scanline.
 

@@ -52,7 +52,7 @@ import sys
 import zlib
 
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'pyshared'))
-from png import encode_png
+from playproof_png import encode_png
 
 # Checkpoint container. `ALEState` restores the emulator and its frame
 # counters, but ALE keeps no cumulative episode reward, so the score travels
@@ -287,9 +287,10 @@ class Worker:
     def screen_rgb(self):
         """The rendered screen as a PNG, or None when the boot did not ask.
 
-        This is the SAME buffer `_evidence` hashes into `frameHash`. The worker
-        captured it for verification already; publishing it costs one encode and
-        gives the agent the picture a human player sees.
+        This reads the SAME buffer `_evidence` hashes into `frameHash`, so the
+        picture the agent sees is the screen the verifier checks. The cost is
+        one screen read and one encode per emulator instant, both cached until
+        the state moves.
         """
         if not self.screen_image:
             return None

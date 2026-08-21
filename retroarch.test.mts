@@ -24,8 +24,9 @@ import { strict as assert } from 'node:assert'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { attestRun } from './attestation'
-import { logFrom } from './runtime'
+import { logFrom, observationOf } from './runtime'
 import { validateContract } from './schema'
+import { decodePng } from './test-png.mts'
 import type { DiscoveryDoc } from './adapters/pyboy-generic'
 import { RetroArchRpc } from './adapters/retroarch-rpc'
 import { channelsFromDiscovery, makeRetroArch, type RetroArch, type RetroArchState } from './adapters/retroarch'
@@ -170,7 +171,7 @@ if (gap) {
   let pinnedPaths: string[] = []
 
   // ── emulator 1: contract derivation, attestation, determinism in process ──
-  const adapter = makeRetroArch(options)
+  const adapter = makeRetroArch({ ...options, screenImage: true })
   try {
     // Identity: RetroArch loaded the content the discovery document pins, and
     // the adapter advertises this core's button vocabulary.
@@ -180,6 +181,27 @@ if (gap) {
     assert.ok(adapter.inputs.includes('NOOP') && adapter.inputs.includes('up+a'),
       `input vocabulary missing expected words: ${adapter.inputs.join(',')}`)
     assert.equal(adapter.identity.channels.length, channels.length)
+
+    // Observation images: this worker needs no encoder. RetroArch writes a PNG
+    // for SCREENSHOT and the evidence path already reads it, so the option
+    // republishes those exact bytes.
+    assert.equal(adapter.identity.screenImage, true)
+    const bootState = adapter.game.init(adapter.seed)
+    const observation = observationOf(adapter.game, bootState)
+    assert.equal(observation.text, adapter.game.frame(bootState))
+    assert.equal(observation.images?.length, 1)
+    const screen = observation.images![0]!
+    assert.equal(screen.mediaType, 'image/png')
+    const decoded = decodePng(Buffer.from(screen.base64, 'base64'))
+    assert.deepEqual([screen.width, screen.height], [decoded.width, decoded.height])
+    // `frameHash` covers the DECODED pixels and never the file, because
+    // RetroArch picks a filter per scanline. That is what makes republishing
+    // its file sound, and it lets this gate prove the identity: the picture the
+    // agent sees is the screen the verifier hashes.
+    assert.equal(
+      createHash('sha256').update(decoded.pixels).digest('hex'),
+      adapter.game.evidence(bootState).frameHash,
+    )
 
     // Authoring: contract derived from the discovered channels with
     // event-anchored marks. No hash, position, or threshold is in the adapter.
@@ -260,6 +282,10 @@ if (gap) {
   try {
     secondPid = second.identity.pid
     assert.equal(second.game.id, adapter.game.id)
+    // The image channel is off by default, and turning it on changed neither
+    // the game id nor anything a verifier recomputes.
+    assert.equal(second.identity.screenImage, false)
+    assert.equal('images' in observationOf(second.game, second.game.init(second.seed)), false)
     const elsewhere = attestRun(
       second.game,
       adapter.contract,
