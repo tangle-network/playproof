@@ -15,6 +15,7 @@ The core never changes when a new adapter arrives.
 | `adapters/stable-retro` | Any console stable-retro bundles a libretro core for, out of process | ASCII frame downsample plus a variable summary | Integration variables read from RAM, framebuffer hash, bounded derived frame numbers | `replay` | **Yes**, on the bundled free ROM |
 | `adapters/ale` | Any Atari 2600 ROM `ale-py` bundles, out of process | ASCII frame downsample plus a score, lives, and frame summary | Cumulative score, lives, emulator counters, named RAM bytes, framebuffer hash, emulator-state hash | `replay` | **Yes**, on the bundled ROM set |
 | `adapters/gymnasium` | Any registered Gymnasium environment with a `Discrete` action space, out of process | The `ansi` render, the text observation, or a labelled number list | Cumulative reward, step count, termination flags, numeric `info` entries, the observation hash, and a bounded projection of the observation | `replay`, for seed-deterministic environments only | **Yes**, on environments that ship with the library |
+| `adapters/retroarch` | Any libretro core, inside a RetroArch process the adapter launches and drives as a black box | ASCII downsample of the screenshot plus a one-line channel summary | Caller-declared memory channels read with `READ_CORE_MEMORY`, decoded-screenshot hash, bounded derived frame numbers | `replay` | **Yes**, on a downloaded core and the free Libbet ROM |
 | `platforms/steam` | Nothing; the title runs elsewhere | Not provided by the adapter | Steam Web API achievements and statistics, or a title-side bridge | `platform-attested` | Contract tests only |
 | `platforms/xbox` | Nothing; the title runs elsewhere | Not provided by the adapter | Xbox services achievements and statistics, or a GDK/XSAPI bridge | `platform-attested` | Contract tests only |
 
@@ -182,14 +183,60 @@ PLAYPROOF_REQUIRE_GYM=1 pnpm test:gym
 
 For any other environment, supply a reference playthrough through `options.reference`.
 
+## Any RetroArch core through the black-box host
+
+`adapters/retroarch` links no emulator. It launches the RetroArch binary the caller names and drives it over the two UDP interfaces RetroArch already publishes, so the reachable set is every core RetroArch can load rather than the set some Python package chose to bundle.
+
+### The two interfaces
+
+| Interface | Setting | Playproof uses it for |
+|---|---|---|
+| Network command | `network_cmd_enable`, `network_cmd_port` | `FRAMEADVANCE` one frame, `READ_CORE_MEMORY <hexaddr> <n>` for evidence, `SCREENSHOT`, `SAVE_STATE` and `LOAD_STATE` for checkpoints, `PAUSE_TOGGLE` and `RESET` for boot, `GET_STATUS` as the acknowledgement every other verb lacks |
+| Network remote gamepad | `network_remote_enable`, `network_remote_base_port` | One 20-byte `struct remote_message { int port, device, index, id; uint16_t state; }` per button transition |
+
+### What the black box forced, and what was measured
+
+RetroArch is not an API, so each of these is a measurement against the real binary rather than a documented contract. RetroArch 1.22.2 was the version measured.
+
+| Behaviour | Measurement | Consequence for the worker |
+|---|---|---|
+| Unset directory settings | RetroArch copies path settings with `strlcpy` during the first `retro_run` and segfaults on a NULL | The generated config sets **every** directory key, and the core is copied into the run's own `libretro_directory` |
+| `video_driver = "null"` | Boots headless, opens no window, and still serves `SCREENSHOT`; frame-by-frame hashes matched the `gl` driver exactly | Headless is the default, and no display is required |
+| `FRAMEADVANCE` | Edge triggered: two advance datagrams in consecutive polls advance **one** frame | Every frame costs an advance poll and then a poll without it |
+| Frame-advance throughput | ~59 frames per second paused; ~80 with `FAST_FORWARD_HOLD` in the advance datagram, which removes the throttle without changing how many frames the core runs | The advance datagram holds fast-forward |
+| `SAVE_STATE` and `LOAD_STATE` | Checked far enough down the hotkey path that a paused iteration never reaches them; both work when they travel in the same datagram as `FRAMEADVANCE`. `SAVE_STATE` samples the state before that frame runs; `LOAD_STATE` consumes the frame | `snapshot` and `restore` both leave the emulator one frame past the snapshotted instant, which is what makes the round trip exact |
+| `READ_CORE_MEMORY` reply size | One reply must fit one UDP datagram; 2048 bytes per request works, 4096 does not | Channels are covered by as few capped block reads as possible, all sent in one datagram |
+| Remote gamepad | Holds its bitmask until a later message changes it, and RetroArch reads at most one remote message per poll | A message is sent only when a button changes, and a combo drains one poll per changed button |
+| Instances | A second RetroArch refuses to come up while one is running | One worker owns one emulator; dispose before booting the next |
+| Launch race | A launch can come up without a run loop, so the process lives and answers nothing. Never observed mid-run | Bounded relaunch, six attempts |
+| macOS state restoration | After an unclean exit AppKit blocks every later launch inside `-[NSApplication _reopenWindowsAsNecessaryIncludingRestorableState:]`, before RetroArch runs any of its own code | The worker deletes the saved state before each launch and names `defaults write <bundle-id> ApplePersistenceIgnoreState -bool YES` in the failure message |
+| macOS App Nap | A windowless background application is throttled, which stalls frame advance for seconds at a time mid-run | The failure message names `defaults write <bundle-id> NSAppSleepDisabled -bool YES` |
+
+### Determinism
+
+Libretro cores take no seed, so `init(seed)` cannot rebuild a run the way a seeded environment can. Instead the worker pins a boot state — pause, `RESET`, `bootFrames` fixed advances, save state — and `init` restores it. Every later transition is an explicit, counted frame advance from that state, so the input log plus the boot state is the complete determinism key. The seed is recorded and reported so run artifacts keep one shape, but it is nominal.
+
+`bootFrames` is a real per-game knob, because a core reset does not clear work RAM: until the game finishes its own initialisation, the boot state inherits whatever the launch race produced. Measured on gambatte with Libbet, over 21 evidence snapshots compared between two separately launched emulators:
+
+| `bootFrames` | Snapshots identical across processes |
+|---|---|
+| 60 | 20 of 21 |
+| **180** | **21 of 21** |
+| 420 | 3 of 21 (the title-screen animation is by then at a phase that depends on the residue) |
+
+No `saveBlobHash` is published. RetroArch compresses save states, and a compressed state is not a stable identity for a game position; the bytes were measured **not** equal between processes at the same instant. Checkpoints stay exact within one worker, which is all snapshot and restore need.
+
+### The cross-emulator proof
+
+The gate does not merely run a Game Boy game. It replays the 266-input reference from `pyboy/discovery-libbet.json` — whose channel addresses a blind search found by watching **PyBoy's** work RAM — through RetroArch and gambatte, software that shares no code with PyBoy. `channelsFromDiscovery` converts the discovered addresses into RetroArch channels, so one discovery document drives two unrelated emulators and neither adapter carries a hand-copied address.
+
+The hard assertion is the milestone outcome: the contract derived over those channels verifies clean through RetroArch, and a garbage script of equal length is rejected. Per-step channel agreement with PyBoy's own recorded values is reported rather than asserted exactly, because two emulators put frame boundaries in different places and a channel that samples an animation can disagree on a few steps.
+
 ## Candidate adapters
 
-Ordered by how much reach each one buys per unit of work.
+Ordered by how much reach each one buys per unit of work. RetroArch as a black-box host was the first entry here and is now shipped; see [Any RetroArch core](#any-retroarch-core-through-the-black-box-host) above.
 
 **Direct libretro core loader over `ctypes`.** stable-retro compiles a fixed set of cores into its own binary. Loading `libretro.so` cores directly through the C ABI turns the ceiling into "any core that exists": N64 through Mupen64Plus, DS through melonDS, PS1 through Beetle PSX or PCSX-ReARMed, PSP through PPSSPP, 3DS, arcade through MAME or FinalBurn Neo, DOS through DOSBox, and adventure games through ScummVM. The libretro ABI already exposes exactly what Playproof needs — `retro_run`, `retro_serialize`, `retro_unserialize`, `retro_get_memory_data`, and a fixed input descriptor — so this should be **one** worker with a per-core manifest declaring the memory map, the button layout, and the save-state stability the core actually offers. Each new core becomes a data file, not code. The determinism question above must be answered per core: several of these are known to be non-reproducible across processes and would honestly be `trusted-recorder`.
-
-**RetroArch as a black-box host.** RetroArch ships every libretro core the `ctypes` loader would target and already exposes the control surface Playproof needs without any C ABI work: the network command interface (`network_cmd_enable`) accepts `FRAMEADVANCE`, `PAUSE_TOGGLE`, `SAVE_STATE`, `LOAD_STATE`, `READ_CORE_MEMORY`, `SCREENSHOT`, and `GET_STATUS` over UDP, and the network remote gamepad (`network_remote_enable`) accepts per-frame button state over UDP. One worker that launches RetroArch with a core, a ROM, and those two interfaces enabled gives frame-stepped execution, RAM-backed evidence, save states, and frame capture for N64, DS, PS1, PSP, GameCube and Wii, Dreamcast, Saturn, 3DS, and arcade in one stroke, using the core binaries the libretro buildbot already publishes. It is cheaper than the direct loader and should come first; the direct loader remains the answer where RetroArch cannot run headless or where a core needs a tighter step boundary than `FRAMEADVANCE` offers. Determinism is still a per-core measurement, exactly as for stable-retro, and cores that do not reproduce across processes declare `trusted-recorder`.
-
 
 **Dolphin (GameCube and Wii).** Reachable through the scripting fork's Lua and Python bindings, which expose memory reads and save states. High value because it opens a console generation nothing else here covers, and high cost because its determinism story is weak and it would likely declare `trusted-recorder`.
 

@@ -49,7 +49,7 @@ jobs:
             pnpm install --no-frozen-lockfile
           fi
       - name: Compile Python workers
-        run: $PLAYPROOF_PYTHON -m compileall -q ale desktop gym native pyboy retro
+        run: $PLAYPROOF_PYTHON -m compileall -q ale desktop gym native pyboy retro retroarch
       - name: Full release-equivalent gate
         run: pnpm run ci
 
@@ -224,3 +224,112 @@ jobs:
       # failure instead of a silent skip.
       - name: Adapter gate
         run: PLAYPROOF_REQUIRE_ALE=1 pnpm test:ale
+
+  real-retroarch:
+    name: RetroArch black-box host adapter on a real emulator
+    runs-on: [self-hosted, ci-linux]
+    timeout-minutes: 45
+    env:
+      # RetroArch ships a self-contained AppImage, which the pool can extract
+      # without sudo or apt. The gambatte core and the free Libbet ROM come
+      # from their own upstreams; nothing here is committed to the repository.
+      RETROARCH_URL: https://buildbot.libretro.com/stable/1.22.2/linux/x86_64/RetroArch.7z
+      CORE_URL: https://buildbot.libretro.com/nightly/linux/x86_64/latest/gambatte_libretro.so.zip
+      CORE_INFO_URL: https://buildbot.libretro.com/assets/frontend/info.zip
+      LIBBET_URL: https://github.com/pinobatch/libbet/releases/download/v0.08/libbet.gb
+      LIBBET_SHA256: 3607412031c8287cf878299ce96e581e85b852dde703806343b95576fa3ff1a9
+      LIBBET_MD5: ce9716a3a431f9722d58d30947f26921
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      # Jobs share one machine on the pool; a per-job dest keeps concurrent
+      # pnpm installs from clobbering ~/setup-pnpm.
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
+        with:
+          version: 11.17.0
+          dest: ${{ runner.temp }}/setup-pnpm
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
+      # The pool has python3 but no ensurepip/python3-venv and no sudo, so uv
+      # is bootstrapped into the job's temp dir and owns the venv and installs.
+      - name: Create a Python virtual environment
+        run: |
+          curl --silent --show-error --location --fail --retry 3 https://astral.sh/uv/install.sh \
+            | env UV_INSTALL_DIR="$RUNNER_TEMP/uv" INSTALLER_NO_MODIFY_PATH=1 sh
+          "$RUNNER_TEMP/uv/uv" venv --python 3.12 "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+          echo "PLAYPROOF_PYTHON=$RUNNER_TEMP/venv/bin/python" >> "$GITHUB_ENV"
+          echo "UV=$RUNNER_TEMP/uv/uv" >> "$GITHUB_ENV"
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Compile the RetroArch worker
+        run: $PLAYPROOF_PYTHON -m compileall -q retroarch
+      # The worker needs no Python package: it drives the emulator over UDP
+      # with the standard library alone.
+      - name: Install RetroArch, the gambatte core, and the free ROM
+        id: assets
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ra/cores" "$RUNNER_TEMP/ra/info"
+          curl --silent --show-error --location --fail --retry 3 \
+            --output "$RUNNER_TEMP/RetroArch.7z" "$RETROARCH_URL"
+          if command -v 7z >/dev/null 2>&1; then
+            7z x -y -o"$RUNNER_TEMP/ra" "$RUNNER_TEMP/RetroArch.7z" >/dev/null
+          elif command -v 7za >/dev/null 2>&1; then
+            7za x -y -o"$RUNNER_TEMP/ra" "$RUNNER_TEMP/RetroArch.7z" >/dev/null
+          else
+            "$UV" tool run --from py7zr py7zr x "$RUNNER_TEMP/RetroArch.7z" "$RUNNER_TEMP/ra"
+          fi
+          # The stable Linux archive ships an AppImage, so it is extracted
+          # rather than mounted; the pool has no FUSE and no sudo.
+          APPIMAGE=$(find "$RUNNER_TEMP/ra" -type f -name '*.AppImage' | head -1)
+          if [ -n "$APPIMAGE" ]; then
+            chmod +x "$APPIMAGE"
+            ( cd "$RUNNER_TEMP/ra" && "$APPIMAGE" --appimage-extract >/dev/null )
+          fi
+          BIN=""
+          for candidate in \
+            "$RUNNER_TEMP/ra/squashfs-root/usr/bin/retroarch" \
+            "$RUNNER_TEMP/ra/squashfs-root/AppRun" \
+            $(find "$RUNNER_TEMP/ra" -type f -name retroarch | head -1); do
+            if [ -f "$candidate" ]; then BIN="$candidate"; break; fi
+          done
+          [ -n "$BIN" ] || { echo "no RetroArch executable in the archive"; exit 1; }
+          chmod +x "$BIN"
+          curl --silent --show-error --location --fail --retry 3 \
+            --output "$RUNNER_TEMP/core.zip" "$CORE_URL"
+          unzip -o -q "$RUNNER_TEMP/core.zip" -d "$RUNNER_TEMP/ra/cores"
+          curl --silent --show-error --location --fail --retry 3 \
+            --output "$RUNNER_TEMP/info.zip" "$CORE_INFO_URL"
+          unzip -o -q "$RUNNER_TEMP/info.zip" -d "$RUNNER_TEMP/ra/info"
+          cp "$RUNNER_TEMP/ra/info/gambatte_libretro.info" "$RUNNER_TEMP/ra/cores/" || true
+          curl --silent --show-error --location --fail --retry 3 \
+            --output "$RUNNER_TEMP/libbet.gb" "$LIBBET_URL"
+          echo "$LIBBET_SHA256  $RUNNER_TEMP/libbet.gb" | sha256sum --check --strict -
+          echo "$LIBBET_MD5  $RUNNER_TEMP/libbet.gb" | md5sum --check --strict -
+          echo "PLAYPROOF_RETROARCH=$BIN" >> "$GITHUB_ENV"
+          echo "PLAYPROOF_RETROARCH_CORE=$RUNNER_TEMP/ra/cores/gambatte_libretro.so" >> "$GITHUB_ENV"
+          echo "PLAYPROOF_ROM=$RUNNER_TEMP/libbet.gb" >> "$GITHUB_ENV"
+          "$BIN" --version || true
+      # The adapter drives RetroArch headless with `video_driver = "null"`,
+      # which was measured to render frames for SCREENSHOT exactly as the gl
+      # driver does. xvfb-run is used only when the pool provides it, because
+      # some RetroArch builds still want an X connection to start.
+      - name: Adapter gate
+        if: steps.assets.outcome == 'success'
+        env:
+          PLAYPROOF_REQUIRE_RETROARCH: '1'
+          SDL_VIDEODRIVER: dummy
+        run: |
+          if command -v xvfb-run >/dev/null 2>&1; then
+            xvfb-run -a pnpm test:retroarch
+          else
+            pnpm test:retroarch
+          fi
+      - name: Report an unusable pool
+        if: steps.assets.outcome != 'success'
+        run: |
+          echo "::warning::RetroArch could not be installed on this runner; the adapter gate did not run. See the pull request body for the local proof."

@@ -113,10 +113,14 @@ BOOT_ATTEMPTS = 6
 # before RetroArch runs any of its own code, which looks exactly like a hung
 # emulator. Deleting the saved state keeps launches clean; the user default
 # below is the permanent fix and the error message names it.
-MACOS_PERSISTENCE_HINT = (
-    'On macOS, disable AppKit window-state restoration for RetroArch once:\n'
+MACOS_DEFAULTS_HINT = (
+    'On macOS, set both of these once for RetroArch:\n'
     '  defaults write %s ApplePersistenceIgnoreState -bool YES\n'
-    'Without it AppKit blocks every launch that follows an unclean exit.'
+    '  defaults write %s NSAppSleepDisabled -bool YES\n'
+    'The first stops AppKit from blocking every launch that follows an\n'
+    'unclean exit while it restores windows. The second stops App Nap from\n'
+    'throttling the run loop of a windowless background application, which\n'
+    'stalls frame advance for seconds at a time.'
 )
 
 # Advance one emulator frame, then confirm the poll that consumed it. The
@@ -378,7 +382,8 @@ class RetroArch:
                 self.kill(keep_run_dir=True)
         hint = ''
         if sys.platform == 'darwin':
-            hint = '\n' + MACOS_PERSISTENCE_HINT % (self._bundle_id() or 'com.libretro.RetroArch')
+            bundle = self._bundle_id() or 'com.libretro.RetroArch'
+            hint = '\n' + MACOS_DEFAULTS_HINT % (bundle, bundle)
         raise RetroArchError(
             'RetroArch never came up in %d attempts:\n%s%s\nLog tail:\n%s'
             % (BOOT_ATTEMPTS, '\n'.join(failures), hint, self.log_tail()))
@@ -570,8 +575,16 @@ class RetroArch:
         for _ in range(frames):
             if self.command(ADVANCE_MSG) is None:
                 self._alive()
-                raise RetroArchError('RetroArch stopped answering during a frame advance')
+                raise RetroArchError(
+                    'RetroArch is running but stopped answering during a frame advance.%s'
+                    % self._stall_hint())
             self.gap()
+
+    def _stall_hint(self):
+        if sys.platform != 'darwin':
+            return ''
+        bundle = self._bundle_id() or 'com.libretro.RetroArch'
+        return '\n' + MACOS_DEFAULTS_HINT % (bundle, bundle)
 
     def reset_core(self):
         self.send('RESET')
@@ -650,53 +663,52 @@ class RetroArch:
 
     # ---- save states -----------------------------------------------------
 
-    def _resolve_state_path(self):
-        if self.state_path and os.path.exists(os.path.dirname(self.state_path)):
-            return self.state_path
-        marker = 'Redirecting save state to "'
-        try:
-            with open(self.log_path) as handle:
-                text = handle.read()
-        except OSError:
-            text = ''
-        index = text.find(marker)
-        if index >= 0:
-            start = index + len(marker)
-            self.state_path = text[start:text.index('"', start)]
-            return self.state_path
-        base = os.path.splitext(os.path.basename(self.content))[0] + '.state'
-        self.state_path = os.path.join(self.savestate_dir, base)
-        return self.state_path
+    def _state_files(self):
+        return sorted(
+            path for path in glob.glob(os.path.join(self.savestate_dir, '**', '*'), recursive=True)
+            if os.path.isfile(path))
 
     def save_state(self):
-        """Save the current state. Costs exactly one frame (measured fact 5)."""
-        path = self._resolve_state_path()
-        if os.path.exists(path):
-            os.remove(path)
+        """Save the current state. Costs exactly one frame (measured fact 5).
+
+        RetroArch decides the file name from the content, the core, and its
+        own sorting settings, so the state is found by scanning the run's
+        private save-state directory rather than by rebuilding that name here.
+        """
+        for stale in self._state_files():
+            try:
+                os.remove(stale)
+            except OSError:
+                pass
         deadline = time.time() + COMMAND_TIMEOUT
         self.command('FAST_FORWARD_HOLD\nFRAMEADVANCE\nSAVE_STATE\nGET_STATUS')
         self.gap()
         while time.time() < deadline:
-            if os.path.exists(path):
+            found = self._state_files()
+            if found:
+                self.state_path = found[0]
                 # The save runs as a task; wait until the size settles so a
                 # partly written file is never read back as a checkpoint.
                 previous = -1
-                for _ in range(200):
-                    size = os.path.getsize(path)
+                for _ in range(400):
+                    size = os.path.getsize(self.state_path)
                     if size == previous and size > 0:
-                        with open(path, 'rb') as handle:
+                        with open(self.state_path, 'rb') as handle:
                             return handle.read()
                     previous = size
                     time.sleep(0.005)
             self._alive()
             self.gap()
-        raise RetroArchError('RetroArch wrote no save state to %s' % path)
+        raise RetroArchError(
+            'RetroArch wrote no save state into %s. Log tail:\n%s'
+            % (self.savestate_dir, self.log_tail()))
 
     def load_state(self, blob):
         """Restore a saved state and land on the same frame `save_state` left."""
-        path = self._resolve_state_path()
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, 'wb') as handle:
+        if self.state_path is None:
+            raise RetroArchError('no save state has been written yet, so none can be restored')
+        os.makedirs(os.path.dirname(self.state_path), exist_ok=True)
+        with open(self.state_path, 'wb') as handle:
             handle.write(blob)
         self.command('FAST_FORWARD_HOLD\nFRAMEADVANCE\nLOAD_STATE\nGET_STATUS')
         self.gap()
@@ -724,7 +736,6 @@ class Worker:
         self.seed = 0
         self.gen = 0
         self.frame = 0
-        self.boot_blob = None
         self.held = set()
         self._cache = None
         self._content_sha = None
@@ -749,33 +760,36 @@ class Worker:
         return self.identity()
 
     def _power_on(self):
-        """Pin a boot state the whole run replays from.
+        """Pin the boot state the whole run replays from.
 
         RetroArch starts emulating the moment content loads, so the instant a
         PAUSE_TOGGLE lands depends on wall clock. RESET returns the core to
         power on and `boot_frames` fixed advances give the game its own
         initialisation, which is what makes the boot state equal across
         processes rather than equal to whatever the launch race produced.
+
+        Every reset repeats exactly this, rather than restoring a saved boot
+        blob. A core reset does not clear work RAM, so the boot state is only
+        well defined once the game has re-initialised it, and re-running the
+        procedure is the same computation the pinning did. It also keeps
+        LOAD_STATE off the hot path: measured on RetroArch 1.22.2, a state
+        load reinitialises the video, input, and audio drivers, and a long run
+        that reloads on every reset eventually exits during one of those
+        reinitialisations.
         """
+        self._release_all()
         self.emulator.reset_core()
         self.emulator.advance(self.boot_frames)
-        self._release_all()
-        self.boot_blob = self.emulator.save_state()
-        # save_state costs one frame; the boot state is the frame after it.
-        self.frame = self.boot_frames + 1
+        self.frame = self.boot_frames
         self.gen += 1
         self._cache = None
 
     def reset(self, seed=None):
         if seed is not None:
             self.seed = int(seed)
-        if self.boot_blob is None:
+        if self.emulator is None:
             raise RetroArchError('reset before boot')
-        self._release_all()
-        self.emulator.load_state(self.boot_blob)
-        self.frame = self.boot_frames + 1
-        self.gen += 1
-        self._cache = None
+        self._power_on()
         return {'gen': self.gen, 'frame': self.frame}
 
     def identity(self):
@@ -785,7 +799,10 @@ class Worker:
             'core': os.path.basename(self.emulator.core),
             'content': os.path.basename(self.emulator.content),
             'contentSha': self._content_sha,
-            'status': self.emulator.status,
+            # Live status, not the one the launch saw: identity() is
+            # reported after the boot state is pinned, so a caller can
+            # see that the emulator really is paused and frame stepped.
+            'status': self.emulator.status_line(),
             'buttons': list(self.buttons),
             'inputs': self.vocabulary(),
             'channels': [channel['id'] for channel in self.channels],

@@ -1,0 +1,279 @@
+/**
+ * RetroArch adapter test — the black-box host gate, and the cross-emulator proof.
+ *
+ * The headline is not that a Game Boy game runs. It is that the SAME evidence
+ * channels `pyboy/discover.py` found by watching PyBoy's work RAM verify
+ * through RetroArch and gambatte, two pieces of software that share no code
+ * with PyBoy. `pyboy/discovery-libbet.json` supplies the addresses, the decode
+ * of each channel, the 266-input reference script, and PyBoy's own recorded
+ * value for every channel at every step. Nothing in this file is typed by
+ * hand: not an address, not a threshold, not a hash.
+ *
+ * Assets are never committed. The test needs three paths from the environment:
+ *   PLAYPROOF_RETROARCH       RetroArch executable
+ *   PLAYPROOF_RETROARCH_CORE  gambatte core (libretro buildbot)
+ *   PLAYPROOF_ROM             Libbet and the Magic Floor v0.08, free software
+ * It skips with one line when they are missing, unless
+ * PLAYPROOF_REQUIRE_RETROARCH=1, which turns a missing asset into a loud
+ * failure (that is how CI proves the job really executed).
+ *
+ * RetroArch runs one instance at a time, so every emulator in this file is
+ * booted, used, and disposed before the next one starts.
+ */
+import { strict as assert } from 'node:assert'
+import { createHash } from 'node:crypto'
+import { existsSync, readFileSync } from 'node:fs'
+import { attestRun } from './attestation'
+import { logFrom } from './runtime'
+import { validateContract } from './schema'
+import type { DiscoveryDoc } from './adapters/pyboy-generic'
+import { RetroArchRpc } from './adapters/retroarch-rpc'
+import { channelsFromDiscovery, makeRetroArch, type RetroArch, type RetroArchState } from './adapters/retroarch'
+
+const binary = process.env.PLAYPROOF_RETROARCH
+const core = process.env.PLAYPROOF_RETROARCH_CORE
+const rom = process.env.PLAYPROOF_ROM
+
+/**
+ * PyBoy applies each input for 2 frames and lets the game settle for 8. The
+ * same window is used here so the two emulators see the same input timing and
+ * the channel comparison measures the emulators, not two different scripts.
+ */
+const FRAMES = 10
+const PRESS_FRAMES = 2
+/**
+ * Frames advanced after the core reset that pin the boot state. RetroArch
+ * starts emulating the moment content loads and a core reset does not clear
+ * work RAM, so the boot state inherits whatever the launch race produced
+ * until the game finishes its own initialisation. Measured on gambatte with
+ * Libbet: 60 frames leaves one snapshot of 21 differing between processes,
+ * 180 frames makes every snapshot identical, and 420 frames diverges again
+ * because the title screen animation is by then running at a phase that
+ * depends on the residue. 180 is the value cross-process determinism holds at.
+ */
+const BOOT_FRAMES = 180
+/** Determinism and cross-emulator agreement are measured over this prefix. */
+const TRACE_INPUTS = 120
+
+function missing(): string | null {
+  if (!binary) return 'PLAYPROOF_RETROARCH is unset (path to the RetroArch executable)'
+  if (!existsSync(binary)) return `PLAYPROOF_RETROARCH=${binary} does not exist`
+  if (!core) return 'PLAYPROOF_RETROARCH_CORE is unset (path to a gambatte libretro core)'
+  if (!existsSync(core)) return `PLAYPROOF_RETROARCH_CORE=${core} does not exist`
+  if (!rom) return 'PLAYPROOF_ROM is unset (path to Libbet and the Magic Floor v0.08)'
+  if (!existsSync(rom)) return `PLAYPROOF_ROM=${rom} does not exist`
+  return null
+}
+
+const gap = missing()
+if (gap) {
+  const hint =
+    `${gap}; the adapter needs a RetroArch binary, a libretro core, and content. ` +
+    'Get the core from https://buildbot.libretro.com/nightly/ and the free ROM from ' +
+    'https://github.com/pinobatch/libbet/releases/download/v0.08/libbet.gb'
+  if (process.env.PLAYPROOF_REQUIRE_RETROARCH === '1') {
+    throw new Error(`PLAYPROOF_REQUIRE_RETROARCH=1 but ${hint}`)
+  }
+  console.log(`retroarch: skip: ${hint}`)
+} else {
+  const doc = JSON.parse(readFileSync(new URL('./pyboy/discovery-libbet.json', import.meta.url), 'utf8')) as DiscoveryDoc
+  const romMd5 = createHash('md5').update(readFileSync(rom!)).digest('hex')
+  assert.equal(
+    romMd5,
+    doc.romMd5,
+    `PLAYPROOF_ROM is md5 ${romMd5} but the discovery document was authored on ${doc.romMd5}; ` +
+    'point PLAYPROOF_ROM at Libbet and the Magic Floor v0.08',
+  )
+
+  const channels = channelsFromDiscovery(doc)
+  const reference = doc.exploration.inputs
+  const options = {
+    binary: binary!,
+    core: core!,
+    content: rom!,
+    channels,
+    inputs: ['up', 'down', 'left', 'right', 'a', 'b', 'start', 'select'],
+    frames: FRAMES,
+    pressFrames: PRESS_FRAMES,
+    bootFrames: BOOT_FRAMES,
+    reference,
+  }
+
+  /** One replay of a script, recorded as the evidence a verifier would recompute. */
+  const trace = (adapter: RetroArch, inputs: readonly string[]): { rows: string[]; engine: Record<string, number>[] } => {
+    let state: RetroArchState = adapter.game.init(adapter.seed)
+    const rows: string[] = []
+    const engine: Record<string, number>[] = []
+    const record = (s: RetroArchState): void => {
+      const e = adapter.game.evidence(s)
+      rows.push(JSON.stringify([e.frameHash, e.engineState, e.frameState]))
+    }
+    record(state)
+    for (const input of inputs) {
+      state = adapter.game.step(state, input)
+      record(state)
+      engine.push({ ...(adapter.game.evidence(state).engineState ?? {}) })
+    }
+    return { rows, engine }
+  }
+
+  const dead = async (pid: number | null): Promise<boolean> => {
+    if (pid === null) return false
+    for (let i = 0; i < 100; i++) {
+      try {
+        process.kill(pid, 0)
+      } catch {
+        return true
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    return false
+  }
+
+  const prefix = reference.slice(0, TRACE_INPUTS)
+  let first: { rows: string[]; engine: Record<string, number>[] }
+  let firstPid: number | null = null
+  let contractIds: string[] = []
+
+  // ── emulator 1: contract derivation, attestation, determinism in process ──
+  const adapter = makeRetroArch(options)
+  try {
+    // Identity: RetroArch loaded the content the discovery document pins, and
+    // the adapter advertises this core's button vocabulary.
+    assert.equal(adapter.identity.contentSha, createHash('sha256').update(readFileSync(rom!)).digest('hex'))
+    assert.ok(adapter.identity.status.includes('PAUSED'), `emulator is not paused: ${adapter.identity.status}`)
+    assert.equal(adapter.game.id, `retroarch-gambatte-${adapter.identity.contentSha.slice(0, 8)}`)
+    assert.ok(adapter.inputs.includes('NOOP') && adapter.inputs.includes('up+a'),
+      `input vocabulary missing expected words: ${adapter.inputs.join(',')}`)
+    assert.equal(adapter.identity.channels.length, channels.length)
+
+    // Authoring: contract derived from the discovered channels with
+    // event-anchored marks. No hash, position, or threshold is in the adapter.
+    assert.deepEqual(validateContract(adapter.contract), [])
+    assert.ok(adapter.contract.milestones.length >= 4, `thin contract: ${adapter.contract.milestones.length} milestones`)
+    const tiers = new Set(adapter.contract.milestones.map((m) => m.tier))
+    assert.ok(tiers.has('engine-state') && tiers.has('screen-frame'),
+      `expected engine-state and screen-frame tiers, got ${[...tiers].join(',')}`)
+    const kinds = new Set(adapter.contract.milestones.map((m) => m.check.kind))
+    assert.ok(kinds.has('state-path') && kinds.has('frame-hash') && kinds.has('frame-path'),
+      `expected state-path, frame-hash and frame-path checks, got ${[...kinds].join(',')}`)
+
+    // Known-good: the discovered reference verifies every milestone THROUGH
+    // RETROARCH. This is the cross-emulator claim: channels found on PyBoy
+    // carry real progression on gambatte.
+    contractIds = adapter.contract.milestones.map((m) => m.id)
+    const good = attestRun(adapter.game, adapter.contract, adapter.seed, logFrom(adapter.seed, [...adapter.reference]), contractIds)
+    assert.equal(good.verdict, 'clean', `reference rejected: ${good.reasons.join('; ')}`)
+    // Milestones verify in the order they fire, which is not the order they
+    // are declared in, so the claim is that every one of them reproduced.
+    assert.deepEqual([...good.verified].sort(), [...contractIds].sort())
+    assert.ok(good.verified.length > 0)
+
+    // False claim: a garbage script of the same length claiming the same
+    // milestones is rejected. The words mix real buttons with nonsense that
+    // maps to a no-op.
+    const garbageWords = ['start', 'select', 'b', 'wiggle', 'flibbertigibbet', 'select', 'b', 'start']
+    const garbage = adapter.reference.map((_, i) => garbageWords[i % garbageWords.length]!)
+    const rejected = attestRun(adapter.game, adapter.contract, adapter.seed, logFrom(adapter.seed, garbage), contractIds)
+    assert.equal(rejected.verdict, 'rejected')
+    assert.ok(rejected.reasons.some((r) => r.startsWith('claimed-not-reproduced')), rejected.reasons.join('; '))
+
+    // Determinism inside one emulator.
+    first = trace(adapter, prefix)
+    const again = trace(adapter, prefix)
+    assert.deepEqual(again.rows, first.rows, 'same-process replay diverged')
+    assert.equal(first.rows.length, prefix.length + 1)
+
+    // Unknown inputs are no-ops, not cheats and not errors.
+    const junkWords = ['FLIBBERTIGIBBET', '', 'nope', 'b-not-a-button']
+    let junkState = adapter.game.init(adapter.seed)
+    for (const word of junkWords) junkState = adapter.game.step(junkState, word)
+    let noopState = adapter.game.init(adapter.seed)
+    for (const _ of junkWords) noopState = adapter.game.step(noopState, 'NOOP')
+    assert.deepEqual(adapter.game.evidence(junkState), adapter.game.evidence(noopState))
+
+    firstPid = adapter.identity.pid
+  } finally {
+    adapter.dispose()
+  }
+  assert.throws(() => adapter.game.init(adapter.seed), /closed/)
+  assert.ok(await dead(firstPid), `dispose left RetroArch ${firstPid} running`)
+
+  // ── emulator 2: cross-process determinism ────────────────────────────────
+  // A verifier never shares the emulator that produced the run, so this is the
+  // load-bearing case. RetroArch runs one instance at a time, so the first one
+  // is already gone.
+  const second = makeRetroArch(options)
+  let secondPid: number | null = null
+  let other: { rows: string[]; engine: Record<string, number>[] }
+  try {
+    secondPid = second.identity.pid
+    other = trace(second, prefix)
+    assert.deepEqual(other.rows, first!.rows, 'cross-process replay diverged')
+  } finally {
+    second.dispose()
+  }
+  assert.ok(await dead(secondPid), `dispose left RetroArch ${secondPid} running`)
+
+  // ── cross-emulator agreement ─────────────────────────────────────────────
+  // The discovery document carries PyBoy's own value for every channel at
+  // every step of the same script, so the comparison needs no second emulator
+  // running here. Emulators differ in where a frame boundary falls, so a
+  // channel that samples an animation can disagree on a few steps; the hard
+  // assertion is the milestone outcome above, and agreement is reported.
+  const agreement = channels.map((channel) => {
+    // `values` is discovery's recorded PyBoy reading per step. It is not part
+    // of the DiscoveredChannel contract the adapter consumes, so it is read
+    // here through its own narrow shape.
+    const source = doc.channels.find((c) => c.id === channel.id) as unknown as { values?: number[] }
+    const recorded = source.values ?? []
+    const ours = first!.engine.map((row) => row[channel.id]!)
+    const n = Math.min(recorded.length, ours.length)
+    let same = 0
+    for (let i = 0; i < n; i++) if (recorded[i] === ours[i]) same++
+    return { id: channel.id, same, n }
+  })
+  const exact = agreement.filter((a) => a.same === a.n)
+  const near = agreement.filter((a) => a.same >= Math.floor(a.n * 0.9))
+  assert.ok(near.length >= channels.length / 2,
+    `only ${near.length}/${channels.length} channels agree with PyBoy on 90% of steps: ` +
+    agreement.map((a) => `${a.id} ${a.same}/${a.n}`).join(', '))
+
+  // ── emulator 3: checkpoints ──────────────────────────────────────────────
+  const rpc = new RetroArchRpc()
+  let rpcPid: number | null = null
+  try {
+    const identity = rpc.boot({
+      binary: binary!,
+      core: core!,
+      content: rom!,
+      channels,
+      inputs: options.inputs,
+      frames: FRAMES,
+      pressFrames: PRESS_FRAMES,
+      bootFrames: BOOT_FRAMES,
+    })
+    rpcPid = identity.pid
+    for (const input of reference.slice(0, 40)) rpc.step(input)
+    const checkpoint = rpc.snapshot()
+    const ahead = ['a', 'up', 'b', 'down'].map((w) => JSON.stringify(rpc.step(w).evidence))
+    const restored = rpc.restore(checkpoint)
+    assert.equal(restored.gen, 1)
+    const replayed = ['a', 'up', 'b', 'down'].map((w) => JSON.stringify(rpc.step(w).evidence))
+    assert.deepEqual(replayed, ahead, 'checkpoint restore did not reproduce the same evidence')
+    assert.throws(() => rpc.restore(Buffer.from('not a checkpoint')), /worker restore failed/)
+  } finally {
+    rpc.shutdown()
+  }
+  assert.ok(await dead(rpcPid), `shutdown left RetroArch ${rpcPid} running`)
+
+  console.log(
+    `retroarch: gambatte through RetroArch ${adapter.identity.status.split(' ')[1] ?? ''} — ` +
+    `${contractIds.length}-milestone contract derived from ${channels.length} discovered channels, ` +
+    `known-good over ${reference.length} inputs, false-claim rejected, ` +
+    `cross-process determinism over ${first!.rows.length} snapshots, checkpoint round-trip, ` +
+    `unknown-input no-op, teardown OK; cross-emulator agreement with PyBoy: ` +
+    `${exact.length}/${channels.length} channels exact, ${near.length}/${channels.length} within 10% of steps ` +
+    `over ${TRACE_INPUTS} inputs`,
+  )
+}

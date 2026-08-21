@@ -109,6 +109,14 @@
       "types": "./dist/adapters/stable-retro.d.ts",
       "import": "./dist/adapters/stable-retro.js"
     },
+    "./adapters/retroarch-rpc": {
+      "types": "./dist/adapters/retroarch-rpc.d.ts",
+      "import": "./dist/adapters/retroarch-rpc.js"
+    },
+    "./adapters/retroarch": {
+      "types": "./dist/adapters/retroarch.d.ts",
+      "import": "./dist/adapters/retroarch.js"
+    },
     "./platforms/steam": {
       "types": "./dist/platforms/steam.d.ts",
       "import": "./dist/platforms/steam.js"
@@ -128,6 +136,7 @@
     "test:retro": "tsx stable-retro.test.mts",
     "test:ale": "tsx ale.test.mts",
     "test:gym": "tsx gymnasium.test.mts",
+    "test:retroarch": "tsx retroarch.test.mts",
     "test:pyboy-libbet": "tsx pyboy-libbet.test.mts",
     "verify:package": "node scripts/verify-package.mjs",
     "ci": "pnpm check:boundary && pnpm typecheck && pnpm test && pnpm build && pnpm verify:package",
