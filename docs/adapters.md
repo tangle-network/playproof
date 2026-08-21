@@ -210,8 +210,7 @@ RetroArch is not an API, so each of these is a measurement against the real bina
 | Instances | A second RetroArch refuses to come up while one is running | One worker owns one emulator; dispose before booting the next |
 | `LOAD_STATE` aftermath | A state load reinitialises the video, input, and audio drivers, and that reinitialisation sometimes ends the process | Resets replace the emulator and restore the SAME pinned boot blob, so a dead emulator never reaches the run |
 | Launch race | A launch can come up without a run loop, so the process lives and answers nothing. Never observed mid-run | Bounded relaunch, six attempts |
-| macOS state restoration | After an unclean exit AppKit blocks every later launch inside `-[NSApplication _reopenWindowsAsNecessaryIncludingRestorableState:]`, before RetroArch runs any of its own code | The worker deletes the saved state before each launch and names `defaults write <bundle-id> ApplePersistenceIgnoreState -bool YES` in the failure message |
-| macOS App Nap | A windowless background application is throttled, which stalls frame advance for seconds at a time mid-run | The failure message names `defaults write <bundle-id> NSAppSleepDisabled -bool YES` |
+| macOS | The build Homebrew installs is x86_64 under Rosetta and segfaults inside an environment callback during `retro_run` (`KERN_INVALID_ADDRESS`), repeatedly. AppKit also blocks launches after an unclean exit while restoring windows, and App Nap throttles a windowless application mid-run | **The adapter is unproven on macOS.** The gate refuses to launch an emulator on darwin and skips with one line; Linux CI is the only execution evidence. The two `defaults` are named in the worker's failure messages for anyone who wants to try anyway |
 
 ### Determinism
 
@@ -237,17 +236,32 @@ The claim the gate asserts is the one a verifier actually makes: **the contract 
 
 It is deliberately not "every evidence byte is equal between two boots", because that is measurably not true and asserting it would be dishonest. A core reset does not clear the memory the console powered on with, so two boots start from slightly different residue, and the game reads some of it:
 
-| Evidence | Between two separately launched emulators |
+| Evidence | Between two separately launched emulators, over 121 snapshots |
 |---|---|
-| The channels the derived contract reads | usually every snapshot, not always |
-| The full 24-channel declared set | most snapshots; a low-ranked counter and a low-ranked 4-byte word drift |
-| Screen (`frameHash`, `frameState`) | the first 37 of 61 snapshots, then a fade drifts one animation step |
+| The channels the derived contract reads | 121 of 121 |
+| The full 24-channel declared set | 119 of 121 |
+| Screen (`frameHash`, `frameState`) | 4 of 121 |
 
-The milestones survive that jitter because they are `>=` thresholds on channels that only move forward, which is why the contract re-verifies even when a byte-for-byte comparison does not. The gate prints all three agreement counts on every run, so the numbers stay visible instead of being asserted away.
+Those figures come from one CI run and move between runs, which is exactly why the contract re-verification is the assertion and the counts are printed rather than asserted. The milestones survive the jitter because they are `>=` thresholds on channels that only move forward.
 
 Zeroing the console's volatile regions before the reset was measured and did **not** help: with video RAM, work RAM, sprite memory and high RAM cleared, agreement got worse, not better. The `clearRegions` boot option remains available for cores where the same measurement comes out differently, and screen milestones stay behind `screenMilestones` for the same reason.
 
 No `saveBlobHash` is published either. RetroArch compresses save states, and a compressed state is not a stable identity for a game position; the bytes were measured **not** equal between processes at the same instant. Checkpoints stay exact within one worker, which is all snapshot and restore need.
+
+### Where this is proven
+
+Linux, on the self-hosted CI pool, on every pull request. One run of the gate:
+
+```
+retroarch: gambatte through RetroArch PAUSED — 4-milestone contract derived from 24 discovered
+channels, known-good over 266 inputs, false-claim rejected, contract re-verified in a second
+emulator over 266 inputs (snapshot agreement between the two: pinned channels 121/121, all 24
+channels 119/121, screen 4/121), checkpoint round-trip, unknown-input no-op, teardown OK;
+cross-emulator agreement with PyBoy: 0/24 channels exact, 8/24 agree on 90% of steps,
+23/24 on half, over 120 inputs
+```
+
+macOS is not a supported host for this adapter. See the measured-facts table above.
 
 ### The cross-emulator proof
 

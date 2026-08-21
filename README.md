@@ -319,14 +319,7 @@ PLAYPROOF_ROM=/path/to/libbet.gb \
 PLAYPROOF_REQUIRE_RETROARCH=1 pnpm test:retroarch
 ```
 
-On macOS, set two application defaults for RetroArch once:
-
-```bash
-defaults write com.libretro.RetroArch ApplePersistenceIgnoreState -bool YES
-defaults write com.libretro.RetroArch NSAppSleepDisabled -bool YES
-```
-
-The first stops AppKit from blocking every launch that follows an unclean exit while it restores windows. The second stops App Nap from throttling the run loop of a windowless background application, which stalls frame advance for seconds at a time. The worker names both in its own failure messages.
+**macOS is not supported.** The RetroArch that Homebrew installs is an x86_64 build running under Rosetta, and it segfaults inside an environment callback during `retro_run`. The gate therefore refuses to launch an emulator on darwin and skips with one line, even when the paths are set; Linux CI is the only execution evidence for this adapter. Two application defaults (`ApplePersistenceIgnoreState`, `NSAppSleepDisabled`) are named in the worker's failure messages for anyone who wants to try anyway, but the adapter is unproven there.
 
 ### Steam and Xbox
 

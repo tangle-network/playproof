@@ -57,6 +57,16 @@ const TRACE_INPUTS = 120
 
 
 function missing(): string | null {
+  // Hard platform guard, ahead of every other check. The RetroArch that
+  // Homebrew installs on macOS is an x86_64 build running under Rosetta, and
+  // it segfaults inside an environment callback during `retro_run`
+  // (KERN_INVALID_ADDRESS, repeatedly, with a crash dialog each time). The
+  // adapter is therefore unproven on darwin and this gate never launches an
+  // emulator there, even when the paths are set. Linux CI is the execution
+  // proof; see docs/adapters.md.
+  if (process.platform === 'darwin') {
+    return 'the RetroArch gate does not run on macOS: the x86_64 build under Rosetta segfaults during retro_run'
+  }
   if (!binary) return 'PLAYPROOF_RETROARCH is unset (path to the RetroArch executable)'
   if (!existsSync(binary)) return `PLAYPROOF_RETROARCH=${binary} does not exist`
   if (!core) return 'PLAYPROOF_RETROARCH_CORE is unset (path to a gambatte libretro core)'
@@ -82,7 +92,10 @@ if (gap) {
     `${gap}; the adapter needs a RetroArch binary, a libretro core, and content. ` +
     'Get the core from https://buildbot.libretro.com/nightly/ and the free ROM from ' +
     'https://github.com/pinobatch/libbet/releases/download/v0.08/libbet.gb'
-  if (process.env.PLAYPROOF_REQUIRE_RETROARCH === '1') {
+  // A macOS skip is unconditional: PLAYPROOF_REQUIRE_RETROARCH exists so CI
+  // cannot silently skip a missing asset, not to force an emulator that
+  // crashes on this platform.
+  if (process.env.PLAYPROOF_REQUIRE_RETROARCH === '1' && process.platform !== 'darwin') {
     throw new Error(`PLAYPROOF_REQUIRE_RETROARCH=1 but ${hint}`)
   }
   console.log(`retroarch: skip: ${hint}`)

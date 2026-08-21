@@ -20,7 +20,8 @@ All notable changes to Playproof are documented here.
 
 ### Continuous integration
 
-- A `real-retroarch` job installs RetroArch, the gambatte core, and the verified free Libbet ROM from their own upstreams and runs the black-box host gate on the same pool. The job reports an explicit warning and skips instead of failing if the pool cannot install the emulator.
+- A `real-retroarch` job installs RetroArch from the buildbot AppImage, unpacks the libraries that build links but never calls, downloads the gambatte core and the verified free Libbet ROM, and runs the black-box host gate on the self-hosted Linux pool. The job reports an explicit warning and skips instead of failing if the pool cannot install the emulator.
+- macOS is not a supported host: the x86_64 RetroArch under Rosetta segfaults during `retro_run`, so the gate refuses to launch an emulator on darwin and skips with one line. Linux CI is the only execution evidence for this adapter, and the docs say so.
 
 ## 0.3.0
 
