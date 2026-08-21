@@ -20,8 +20,14 @@ import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { autoMarks, loadDiscovery, makePyBoyGeneric } from './adapters/pyboy-generic'
 import { attestRun } from './attestation'
+import { assertContractSeparates, calibrateContract, UNKNOWN_BASELINE_WORD } from './calibration'
 import { logFrom } from './runtime'
 import { validateContract } from './schema'
+
+/** The Game Boy pad, matching `BUTTONS` in pyboy/tetris.py. */
+const GAME_BOY_BUTTONS = ['up', 'down', 'left', 'right', 'a', 'b', 'start', 'select']
+/** Turn count of the agent campaign this regression pins. */
+const CAMPAIGN_TURNS = 70
 
 const DISCOVERY = fileURLToPath(new URL('./pyboy/discovery-libbet.json', import.meta.url))
 const WORKER_MATCH = 'pyboy/worker.py'
@@ -126,11 +132,51 @@ try {
   }
 
   console.log(`pyboy-libbet: derivation, 3-tier contract, ${all.length} milestones on ${adapter.reference.length} reference inputs, determinism, garbage-input rejection OK`)
+
+  // (e) Calibration regression — this contract is NOT a benchmark, and the
+  // gate must keep saying so.
+  //
+  // A live agent campaign ran 70 turns on this ROM through this adapter and
+  // this discovery document and earned three milestones: ch_c321-progressed,
+  // ch_c32d-progressed, ch_ff96-progressed. Its verdict was clean and its run
+  // replay-verified. Pressing "a" 70 times earns the same three milestones.
+  //
+  // The agent's transcript is not packaged, so the reference here is the
+  // packaged exploration trajectory truncated to the same progress level: the
+  // inputs before the rank-0 channel first moves. Every baseline still gets the
+  // campaign's full 70 turns, which can only favour the baselines.
+  //
+  // Nobody may read a Libbet milestone count as evidence of competence.
+  const rank0 = [...doc.channels].sort((a, b) => a.rank - b.rank)[0]!
+  const report = calibrateContract(adapter.game, adapter.contract, {
+    reference: adapter.reference.slice(0, rank0.firstChangeStep - 1),
+    vocabulary: GAME_BOY_BUTTONS,
+    turns: CAMPAIGN_TURNS,
+    seed: adapter.seed,
+  })
+  for (const outcome of [report.reference, ...report.baselines]) {
+    console.log(`  ${outcome.id.padEnd(32)} ${String(outcome.verified.length).padStart(2)}  ${outcome.verdict}  ${outcome.verified.join(',') || '-'}`)
+  }
+  assert.deepEqual(report.reference.verified, ['ch_c321-progressed', 'ch_c32d-progressed', 'ch_ff96-progressed'],
+    'the reference no longer reproduces the milestone set the live agent earned')
+  const constantA = report.baselines.find((b) => b.id === 'constant:a')
+  assert.deepEqual(constantA?.verified, report.reference.verified,
+    'pressing "a" 70 times must still earn exactly what the evaluated agent earned')
+  assert.ok(report.bestBaselineCount >= report.reference.verified.length,
+    `best baseline ${report.bestBaselineCount} vs reference ${report.reference.verified.length}`)
+  assert.deepEqual(report.separating, [], 'no Libbet milestone is out of reach of a trivial policy')
+  assert.equal(report.separates, false, 'the Libbet discovery contract must not claim to separate')
+  assert.throws(() => assertContractSeparates(report), /constant:a/u)
+  // The milestones need a button, just not the right one: an uninterpretable
+  // word earns nothing, so this is not a pure function of elapsed frames.
+  assert.deepEqual(report.baselines.find((b) => b.id === `constant:${UNKNOWN_BASELINE_WORD}`)?.verified, [])
+
+  console.log(`pyboy-libbet: calibration regression — reference ${report.reference.verified.length} milestones, best trivial baseline ${report.bestBaselineCount} over ${report.turns} turns, separates=${report.separates} OK`)
 } finally {
   adapter.dispose()
 }
 
-// (e) Dispose ends the worker process and closes the transport.
+// (f) Dispose ends the worker process and closes the transport.
 assert.ok(workerPid !== undefined, 'no PyBoy worker process was observed while the adapter was live')
 const deadline = Date.now() + 5_000
 while (workerPids().has(workerPid) && Date.now() < deadline) sleepSync(50)
