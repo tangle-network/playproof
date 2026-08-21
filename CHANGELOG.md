@@ -50,7 +50,10 @@ All notable changes to Playproof are documented here.
 
 - **PyBoy never rendered.** Every tick in the PyBoy wiring ran with `render=False`, which PyBoy treats as frameskipping and which leaves the LCD output buffer untouched. Measured on the 266-input Libbet reference: the framebuffer hash took ONE distinct value for the whole run, so the `screen-frame` milestone the generic adapter derives was pinned on a constant that every run reproduces, including one that never presses a button.
 - The last frame of each input window now renders. Measured: every privileged variable is identical at all 267 snapshots of the reference, the framebuffer hash takes eight distinct values instead of one, and wall time rises about one per cent. `saveBlobHash` does change, because PyBoy serializes its renderer state into the save, so a PyBoy save-file milestone recorded before 0.5.0 does not reproduce after it.
-- `retroarch/worker.py` returned its whole evidence cache entry, not the evidence, on a cache hit. Any second `evidence` call at one emulator instant answered with an array instead of the evidence object.
+### Found and deliberately not fixed here
+
+- `retroarch/worker.py` answers a repeat `evidence` call at one emulator instant with its whole cache entry rather than the evidence. `makeRetroArch` reads the boot evidence through exactly that path, so the contract baseline is empty today and `channelMarks` silently falls back to the discovery document's declared value — the case its own comment warns about, where a milestone can open at the first snapshot.
+- Correcting it is one line, and it changes which milestones the adapter derives. Measured on gambatte with Libbet in CI: with a correct baseline, `ch_c581_c582` stops firing at all, because that channel never leaves the value gambatte powers on with, and contract derivation fails. That is a benchmark change needing its own cross-emulator measurement, so it is recorded in the worker and left for a focused commit rather than carried by a change about what the agent can see.
 
 ### Tests
 

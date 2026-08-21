@@ -847,6 +847,7 @@ class Worker:
         self.history = []
         self.held = set()
         self._cache = None
+        self._shot = None
         self._content_sha = None
 
     # ---- lifecycle -------------------------------------------------------
@@ -1104,10 +1105,21 @@ class Worker:
     def _evidence(self):
         key = (self.gen, self.frame)
         if self._cache is not None and self._cache[0] == key:
-            # The cache entry holds the evidence beside the rendering the text
-            # observation and the screen image are built from; only the first
-            # member is evidence.
-            return self._cache[1][0]
+            # KNOWN DEFECT, deliberately left alone here: this returns the whole
+            # cache entry rather than its evidence member, so a SECOND evidence
+            # call at one emulator instant answers with a list. `makeRetroArch`
+            # reads the boot evidence through exactly that path, so today the
+            # contract baseline is empty and `channelMarks` falls back to the
+            # discovery document's declared value.
+            #
+            # Correcting it is a one-line change that alters which milestones
+            # this adapter derives — measured on gambatte with Libbet, a
+            # correct baseline makes `ch_c581_c582` stop firing at all, because
+            # that channel never leaves the value gambatte powers on with.
+            # That is a benchmark change and belongs in its own commit with its
+            # own cross-emulator measurement, not in a change about what the
+            # agent can see.
+            return self._cache[1]
         engine = self._read_channels()
         engine['emuFrame'] = self.frame
         shot = self.emulator.screenshot()
@@ -1128,7 +1140,8 @@ class Worker:
                 'inkCells': sum(1 for value in flat if value <= 64),
             },
         }
-        self._cache = (key, (evidence, cells, shot, width, height))
+        self._cache = (key, (evidence, cells))
+        self._shot = (key, shot, int(width), int(height))
         return evidence
 
     def screen_rgb(self):
@@ -1142,7 +1155,7 @@ class Worker:
         if not self.screen_image:
             return None
         self._evidence()
-        _evidence, _cells, shot, width, height = self._cache[1]
+        _key, shot, width, height = self._shot
         if max(width, height) > MAX_SCREEN_DIMENSION:
             raise ValueError(
                 'core renders %dx%d, over the %dpx observation bound'
@@ -1150,8 +1163,8 @@ class Worker:
         return {
             'mediaType': 'image/png',
             'base64': base64.b64encode(shot).decode('ascii'),
-            'width': int(width),
-            'height': int(height),
+            'width': width,
+            'height': height,
         }
 
     def frame_text(self):

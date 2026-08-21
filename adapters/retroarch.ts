@@ -298,11 +298,16 @@ export function makeRetroArch(options: RetroArchOptions): RetroArch {
       id: `retroarch-${identity.core.replace(/_libretro\.(?:dylib|so|dll)$/u, '')}-${identity.contentSha.slice(0, 8)}`,
       init: (initSeed) => {
         const r = rpc.reset(initSeed)
+        // Evidence first, then the observation. This worker's evidence cache
+        // answers a repeat call at one instant with the whole entry rather
+        // than the evidence, so the order of these two calls is load-bearing
+        // until that defect is fixed on its own; the worker says the same.
+        const evidence = toEvidence(rpc.evidence())
         const observation = rpc.frameObservation()
         current = {
           gen: r.gen,
           frame: r.frame,
-          evidence: toEvidence(rpc.evidence()),
+          evidence,
           frameText: observation.text,
           ...(observation.image === undefined ? {} : { frameImage: observation.image }),
         }
