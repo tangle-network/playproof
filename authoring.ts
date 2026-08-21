@@ -33,6 +33,23 @@ function checkHolds(check: MilestoneCheck, evidence: Evidence): boolean {
   }
 }
 
+/**
+ * Derive a milestone contract from one demonstrated trajectory.
+ *
+ * The result is a HYPOTHESIS, not a benchmark. This function proves only that
+ * every mark fires on the reference run and that the contract validates. It
+ * cannot know whether the progressions it pinned are hard to reach: a mark
+ * anchored on a memory channel that moves whenever the game runs at all yields
+ * a contract that a constant button press satisfies exactly as well as an
+ * evaluated agent does.
+ *
+ * Blind-discovery marks are the sharp case, because nothing in the pipeline
+ * ever asserts that a discovered channel means progress.
+ *
+ * Run `calibrateContract` from calibration.ts on the derived contract and gate
+ * publication with `assertContractSeparates`. A contract that no trivial policy
+ * can satisfy is a benchmark; an uncalibrated one is a guess.
+ */
 export function deriveContract<S>(
   game: Game<S>,
   seed: number,

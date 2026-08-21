@@ -33,6 +33,7 @@ const productionFiles = new Set([
   'artifact.ts',
   'attestation.ts',
   'authoring.ts',
+  'calibration.ts',
   'campaign.ts',
   'episode.ts',
   'episode-loop.ts',
