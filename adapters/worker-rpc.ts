@@ -15,6 +15,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { closeSync, existsSync, mkdtempSync, openSync, readSync, rmSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { ObservationImage } from '../runtime'
 
 export interface WorkerEvidence {
   engineState: Record<string, number>
@@ -29,6 +30,14 @@ export interface WorkerStepResult {
   frame: number
   evidence: WorkerEvidence
   frameText: string
+  /** Rendered screen, present only when the boot asked a worker for pixels. */
+  frameImage?: ObservationImage
+}
+
+/** A worker's `frame` reply: the text observation and, when booted for it, the screen. */
+export interface WorkerFrame {
+  text: string
+  image?: ObservationImage
 }
 
 export interface WorkerProcessSpec {
@@ -141,7 +150,12 @@ export class WorkerRpc {
   }
 
   frameText(): string {
-    return this.call<{ text: string }>('frame').text
+    return this.call<WorkerFrame>('frame').text
+  }
+
+  /** The whole agent-visible observation in one call, pixels included. */
+  frameObservation(): WorkerFrame {
+    return this.call<WorkerFrame>('frame')
   }
 
   checkpoint<T = unknown>(): T {

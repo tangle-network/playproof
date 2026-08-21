@@ -80,7 +80,23 @@ def _wait_status(pyboy, targets, limit=3000):
 
 def apply_input(pyboy, word):
     """One step input: fixed press+settle window. Returns nothing; the worker
-    advances its frame counter."""
+    advances its frame counter.
+
+    The LAST settle frame renders. PyBoy treats `render=False` as frameskipping
+    and leaves the LCD output buffer alone, so a worker that never renders
+    reports one constant screen for a whole run. Measured on the 266-input
+    Libbet reference: the framebuffer hash took ONE distinct value with
+    rendering off and eight with it on. A screen-frame milestone pinned on that
+    constant is reproduced by every run, including one that never presses a
+    button, so it verified nothing.
+
+    Rendering the final frame of the window was measured to leave every
+    privileged variable untouched, identical at all 267 snapshots of the
+    reference, and to cost about one per cent of wall time. It does change
+    `saveBlobHash`, because PyBoy serializes its renderer state into the save,
+    so a save-file milestone recorded before this change does not reproduce
+    after it.
+    """
     btn = word if word in BUTTONS else None
     if btn:
         pyboy.button_press(btn)
@@ -88,8 +104,8 @@ def apply_input(pyboy, word):
         pyboy.tick(1, False)
     if btn:
         pyboy.button_release(btn)
-    for _ in range(SETTLE_FRAMES):
-        pyboy.tick(1, False)
+    for frame in range(SETTLE_FRAMES):
+        pyboy.tick(1, frame == SETTLE_FRAMES - 1)
 
 
 def run_preamble(pyboy):
@@ -115,8 +131,10 @@ def run_preamble(pyboy):
     advance({ST_SELECT_TYPE, ST_SELECT_LEVEL_A})
     advance({ST_SELECT_LEVEL_A})
     advance({ST_INGAME})
-    for _ in range(6):
-        pyboy.tick(1, False)
+    for frame in range(6):
+        # The preamble also ends on a rendered frame, so the first observation
+        # an agent sees is the screen and not an unwritten buffer.
+        pyboy.tick(1, frame == 5)
 
 
 def well_grid(pyboy):

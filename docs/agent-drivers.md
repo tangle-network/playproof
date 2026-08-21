@@ -14,6 +14,16 @@ interface AgentDriver {
       spentUsd: number
       remainingBudgetUsd: number
       guidance?: string
+      observation?: {
+        text: string
+        images?: readonly {
+          mediaType: 'image/png' | 'image/jpeg'
+          base64: string
+          width: number
+          height: number
+          label?: string
+        }[]
+      }
       signal?: AbortSignal
     },
   ): Promise<{ input: string; costUsd: number }>
@@ -21,6 +31,8 @@ interface AgentDriver {
 ```
 
 The benchmark owns game execution, privileged evidence, milestone verification, accounting, and the signed run artifact. The driver sees only the observation channel and its own prior trajectory.
+
+`context.observation` is that channel in full. `observation.text` is exactly the `frame` argument, so a text-only driver ignores the field and behaves as it always did. `observation.images` is present only when the game publishes pixels; see the observation-channel section of the README for the caps and the reason history stays text only.
 
 ## A plain callback
 
@@ -54,6 +66,23 @@ const driver = createOpenAICompatibleDriver({
 
 The driver uses Chat Completions-compatible `POST /chat/completions`, bounds response bytes and wall time, exposes the remaining benchmark budget to the model, and computes cost only from a server-returned cost field or caller-supplied pricing. Missing pricing remains zero and should be treated as unavailable by studies that require complete cost coverage.
 
+### Sending screen images
+
+```ts
+const driver = createOpenAICompatibleDriver({ model: 'your-model', vision: true, imageDetail: 'high' })
+```
+
+`vision` is off by default, because images are billed as tokens and an existing caller must not start paying for them silently. With it on and an observation that carries images, the user message becomes content parts:
+
+```json
+[
+  { "type": "text", "text": "Decision 3 of 100 …" },
+  { "type": "image_url", "image_url": { "url": "data:image/png;base64,…", "detail": "high" } }
+]
+```
+
+An image `label` becomes its own text part immediately before the picture. With vision off, or on a turn whose observation has no images, the request is the single string it always was.
+
 ## Any CLI or coding harness
 
 ```ts
@@ -86,6 +115,18 @@ Each invocation receives one JSON object on stdin:
   }
 }
 ```
+
+With `vision: true`, the request gains an `images` key for the turn's rendered screens and nothing else changes:
+
+```json
+{
+  "images": [
+    { "mediaType": "image/png", "base64": "iVBORw0KGgo…", "width": 480, "height": 630, "label": "screen" }
+  ]
+}
+```
+
+The key is absent when vision is off or the turn has no pixels, so a CLI written against the current request keeps receiving the current request. `vision: true` requires `stdin: 'json'` and fails at construction otherwise, because the rendered prompt is a text protocol that cannot carry an image.
 
 It returns:
 

@@ -13,6 +13,11 @@
  *   B save-file — sha256 of the serialized `ALEState`
  *   D screen-frame — sha256 of the raw RGB screen
  *
+ * `screenImage` turns on the observation image channel: the worker encodes the
+ * same RGB screen it hashes for evidence as a PNG, and `observe()` hands it to
+ * the agent next to the ASCII text. It is off by default, so an existing run
+ * costs the same bytes it costs today.
+ *
  * `saveBlobHash` is published here, and that is the opposite of what
  * `adapters/stable-retro` concluded on its own substrate. Measured on Breakout
  * with ale-py 0.12.1: over the 210-input reference, two separate worker
@@ -35,7 +40,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { deriveContract, type MarkPoint } from '../authoring'
-import type { Evidence, Game } from '../runtime'
+import type { Evidence, Game, ObservationImage } from '../runtime'
 import type { EvidenceTier, MilestoneContract, NumericOperator } from '../schema'
 import { AleRpc, type AleIdentity, type AleRamChannel, type WorkerEvidence } from './ale-rpc'
 
@@ -84,6 +89,8 @@ export interface AleState {
   frame: number
   evidence: Evidence
   frameText: string
+  /** Rendered screen, present only when the adapter booted with `screenImage`. */
+  frameImage?: ObservationImage
 }
 
 export interface AleOptions {
@@ -99,6 +106,16 @@ export interface AleOptions {
   difficulty?: number
   /** Sticky actions. Leave at 0 for a replay-verifiable run. */
   repeatActionProbability?: number
+  /**
+   * Publish the rendered screen to the agent as a PNG. Off by default.
+   *
+   * The pixels are observation only. They never enter the input log, the
+   * contract, or the attestation, so a run verifies identically with or
+   * without them.
+   */
+  screenImage?: boolean
+  /** Whole-pixel upscale of the published screen, 1..8. Native is 160x210. */
+  screenScale?: number
   /** Overrides the bundled reference; required for a game with none. */
   reference?: AleReference
 }
@@ -216,6 +233,8 @@ export function makeAle(options: AleOptions): Ale {
       ...(options.mode !== undefined ? { mode: options.mode } : {}),
       ...(options.difficulty !== undefined ? { difficulty: options.difficulty } : {}),
       ...(channels.length > 0 ? { channels } : {}),
+      ...(options.screenImage === undefined ? {} : { screenImage: options.screenImage }),
+      ...(options.screenScale === undefined ? {} : { screenScale: options.screenScale }),
     })
   } catch (error) {
     rpc.shutdown()
@@ -233,13 +252,21 @@ export function makeAle(options: AleOptions): Ale {
     frame: identity.frame,
     evidence: toEvidence(rpc.evidence()),
     frameText: identity.frameText,
+    ...(identity.frameImage === undefined ? {} : { frameImage: identity.frameImage }),
   }
 
   const game: Game<AleState> = {
     id: `ale-${identity.game}`,
     init: (initSeed) => {
       const r = rpc.reset(initSeed)
-      current = { gen: r.gen, frame: r.frame, evidence: toEvidence(rpc.evidence()), frameText: rpc.frameText() }
+      const observation = rpc.frameObservation()
+      current = {
+        gen: r.gen,
+        frame: r.frame,
+        evidence: toEvidence(rpc.evidence()),
+        frameText: observation.text,
+        ...(observation.image === undefined ? {} : { frameImage: observation.image }),
+      }
       return current
     },
     step: (s, input) => {
@@ -249,10 +276,21 @@ export function makeAle(options: AleOptions): Ale {
         throw new Error(`stale state: gen ${s.gen} but worker is at gen ${current.gen} — step ordering violated`)
       }
       const r = rpc.step(input)
-      current = { gen: current.gen, frame: r.frame, evidence: toEvidence(r.evidence), frameText: r.frameText }
+      current = {
+        gen: current.gen,
+        frame: r.frame,
+        evidence: toEvidence(r.evidence),
+        frameText: r.frameText,
+        ...(r.frameImage === undefined ? {} : { frameImage: r.frameImage }),
+      }
       return current
     },
     frame: (s) => s.frameText,
+    // The agent channel: the ASCII text always, and the rendered screen when
+    // the boot asked for it. Never `s.evidence`, which is harness-only.
+    observe: (s) => (s.frameImage === undefined
+      ? { text: s.frameText }
+      : { text: s.frameText, images: [s.frameImage] }),
     evidence: (s) => s.evidence,
   }
 

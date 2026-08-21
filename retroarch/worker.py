@@ -61,6 +61,14 @@ was verified against the real binary; changing them needs a new measurement.
      changes it, and RetroArch reads at most one remote message per poll, so
      this worker sends a message only when a button changes state.
 
+`screenImage` publishes the screen for a vision agent. This worker is the one
+that needs no encoder: RetroArch already writes a PNG for SCREENSHOT and the
+evidence path already reads it, so the option republishes those exact bytes and
+costs nothing beyond the base64. There is no upscale knob here, unlike the ALE,
+PyBoy and stable-retro workers: this worker has no array library, and repeating
+pixels and re-encoding a PNG in pure Python every turn would cost more than the
+option is worth. The channel is off by default.
+
 stdout carries only protocol lines. Diagnostics belong on stderr.
 """
 import atexit
@@ -152,6 +160,8 @@ GLYPH_RAMP = tuple(
     for value in range(256)
 )
 MAX_SUMMARY_CHANNELS = 8
+# The edge a model provider resizes an observation image down to.
+MAX_SCREEN_DIMENSION = 2048
 
 FILE_KEYS = {
     'core_options_path': 'config/core-options.cfg',
@@ -824,6 +834,7 @@ class Worker:
         self.channels = []
         self.blocks = []
         self.buttons = []
+        self.screen_image = False
         self.frames = 4
         self.press_frames = 2
         self.boot_frames = 60
@@ -842,7 +853,8 @@ class Worker:
 
     def boot(self, binary, core, content, channels=None, inputs=None, frames=4,
              press_frames=None, boot_frames=60, system_dir=None,
-             video_driver='null', seed=0, clear_regions=None):
+             video_driver='null', seed=0, clear_regions=None, screen_image=False):
+        self.screen_image = bool(screen_image)
         self.frames = max(1, int(frames))
         self.press_frames = max(1, min(self.frames, int(press_frames) if press_frames is not None else min(2, self.frames)))
         self.boot_frames = max(0, int(boot_frames))
@@ -953,7 +965,9 @@ class Worker:
             'clearRegions': [[start, size] for start, size in self.clear_regions],
             'seed': self.seed,
             'pid': self.emulator.process.pid if self.emulator.process else None,
+            'screenImage': self.screen_image,
             'frameText': self.frame_text(),
+            **({} if not self.screen_image else {'frameImage': self.screen_rgb()}),
         }
 
     def close(self):
@@ -1090,10 +1104,14 @@ class Worker:
     def _evidence(self):
         key = (self.gen, self.frame)
         if self._cache is not None and self._cache[0] == key:
-            return self._cache[1]
+            # The cache entry holds the evidence beside the rendering the text
+            # observation and the screen image are built from; only the first
+            # member is evidence.
+            return self._cache[1][0]
         engine = self._read_channels()
         engine['emuFrame'] = self.frame
-        width, height, bpp, pixels = _decode_png(self.emulator.screenshot())
+        shot = self.emulator.screenshot()
+        width, height, bpp, pixels = _decode_png(shot)
         # The hash covers decoded pixels, never the PNG file: RetroArch picks
         # filters per scanline, so two builds can encode one image two ways.
         frame_hash = hashlib.sha256(pixels).hexdigest()
@@ -1110,8 +1128,31 @@ class Worker:
                 'inkCells': sum(1 for value in flat if value <= 64),
             },
         }
-        self._cache = (key, (evidence, cells))
+        self._cache = (key, (evidence, cells, shot, width, height))
         return evidence
+
+    def screen_rgb(self):
+        """The screenshot RetroArch already wrote, republished byte for byte.
+
+        The evidence path hashes the DECODED pixels rather than this file,
+        because RetroArch picks a filter per scanline and two builds can encode
+        one image two ways. That is exactly why republishing the file is safe:
+        the bytes an agent sees are not the bytes a verifier recomputes.
+        """
+        if not self.screen_image:
+            return None
+        self._evidence()
+        _evidence, _cells, shot, width, height = self._cache[1]
+        if max(width, height) > MAX_SCREEN_DIMENSION:
+            raise ValueError(
+                'core renders %dx%d, over the %dpx observation bound'
+                % (width, height, MAX_SCREEN_DIMENSION))
+        return {
+            'mediaType': 'image/png',
+            'base64': base64.b64encode(shot).decode('ascii'),
+            'width': int(width),
+            'height': int(height),
+        }
 
     def frame_text(self):
         self._evidence()
@@ -1148,7 +1189,10 @@ class Worker:
         """
         self._apply(word)
         evidence = self._evidence()
-        return {'frame': self.frame, 'evidence': evidence, 'frameText': self.frame_text()}
+        result = {'frame': self.frame, 'evidence': evidence, 'frameText': self.frame_text()}
+        if self.screen_image:
+            result['frameImage'] = self.screen_rgb()
+        return result
 
     def snapshot(self):
         self._release_all()
@@ -1199,6 +1243,7 @@ def dispatch(worker, method, params):
             video_driver=params.get('videoDriver', 'null'),
             seed=params.get('seed', 0),
             clear_regions=params.get('clearRegions'),
+            screen_image=params.get('screenImage', False),
         )
     if method == 'reset':
         return worker.reset(params.get('seed'))
@@ -1207,7 +1252,8 @@ def dispatch(worker, method, params):
     if method == 'evidence':
         return worker._evidence()
     if method == 'frame':
-        return {'text': worker.frame_text()}
+        image = worker.screen_rgb()
+        return {'text': worker.frame_text(), **({} if image is None else {'image': image})}
     if method == 'inputs':
         return {'inputs': worker.vocabulary(), 'buttons': list(worker.buttons)}
     if method in ('snapshot', 'checkpoint'):

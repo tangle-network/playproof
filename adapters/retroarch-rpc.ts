@@ -1,5 +1,6 @@
 /** Thin RetroArch specialization of the shared out-of-process WorkerRpc protocol. */
 import { fileURLToPath } from 'node:url'
+import type { ObservationImage } from '../runtime'
 import { WorkerRpc, type WorkerEvidence, type WorkerStepResult } from './worker-rpc'
 
 const WORKER_PATH = fileURLToPath(new URL('../retroarch/worker.py', import.meta.url))
@@ -51,6 +52,13 @@ export interface RetroArchBootOptions {
   systemDir?: string
   /** RetroArch video driver. `null` is headless and still serves SCREENSHOT. */
   videoDriver?: string
+  /**
+   * Republish the SCREENSHOT PNG to the agent. Off by default.
+   *
+   * There is no upscale knob here: the worker has no array library, and the
+   * bytes are RetroArch's own file rather than a re-encode.
+   */
+  screenImage?: boolean
   seed?: number
 }
 
@@ -76,7 +84,11 @@ export interface RetroArchIdentity {
   seed: number
   /** RetroArch's process id, so a caller can prove teardown killed it. */
   pid: number | null
+  /** Whether this boot republishes the screenshot for the agent. */
+  screenImage: boolean
   frameText: string
+  /** The boot screen, present only when `screenImage` is on. */
+  frameImage?: ObservationImage
 }
 
 export class RetroArchRpc extends WorkerRpc {

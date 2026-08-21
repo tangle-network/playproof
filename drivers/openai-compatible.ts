@@ -3,6 +3,7 @@ import type {
   AgentDriver,
   AgentHistoryEntry,
 } from '../episode'
+import type { ObservationImage } from '../runtime'
 
 export interface OpenAICompatibleTokenPricing {
   inputPerMillionUsd: number
@@ -26,6 +27,26 @@ export interface OpenAICompatibleDriverOptions {
   extraBody?: Readonly<Record<string, unknown>>
   parseInput?: (content: string) => string
   pricing?: OpenAICompatibleTokenPricing
+  /**
+   * Send the observation's images as content parts.
+   *
+   * Off by default. Images are billed as tokens, often several hundred per
+   * frame per turn, so an existing caller must opt in before its bill changes.
+   * With it on, a turn whose observation has no images sends the same plain
+   * string request it sends today.
+   */
+  vision?: boolean
+  /** OpenAI `image_url.detail`. Left unset unless the caller names one. */
+  imageDetail?: 'auto' | 'low' | 'high'
+}
+
+type ChatContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string; detail?: string } }
+
+interface ChatMessage {
+  role: 'system' | 'user'
+  content: string | ChatContentPart[]
 }
 
 /**
@@ -108,7 +129,7 @@ function buildMessages(
   history: readonly AgentHistoryEntry[],
   context: Readonly<AgentDecisionContext>,
   options: OpenAICompatibleDriverOptions,
-): Array<{ role: 'system' | 'user'; content: string }> {
+): ChatMessage[] {
   const commandText = options.commands && options.commands.length > 0
     ? `Valid game inputs: ${options.commands.join(', ')}. `
     : ''
@@ -129,10 +150,37 @@ function buildMessages(
     `Current observation:\n${frame}`,
     'Next input:',
   ].filter(Boolean).join('\n\n')
+  const images = options.vision === true ? (context.observation?.images ?? []) : []
   return [
     { role: 'system', content: system },
-    { role: 'user', content: user },
+    { role: 'user', content: images.length === 0 ? user : contentParts(user, images, options.imageDetail) },
   ]
+}
+
+/**
+ * The OpenAI content-part shape for a text prompt plus rendered screens.
+ *
+ * Images follow the text so the model reads the task before the picture, and
+ * each one is a self-contained data URL: nothing is fetched over the network
+ * and no image outlives the request.
+ */
+function contentParts(
+  text: string,
+  images: readonly ObservationImage[],
+  detail: 'auto' | 'low' | 'high' | undefined,
+): ChatContentPart[] {
+  const parts: ChatContentPart[] = [{ type: 'text', text }]
+  for (const image of images) {
+    if (image.label) parts.push({ type: 'text', text: image.label })
+    parts.push({
+      type: 'image_url',
+      image_url: {
+        url: `data:${image.mediaType};base64,${image.base64}`,
+        ...(detail === undefined ? {} : { detail }),
+      },
+    })
+  }
+  return parts
 }
 
 async function readResponseTextBounded(

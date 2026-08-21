@@ -1,11 +1,16 @@
 /**
  * Playproof runtime — deterministic game core, hash-chained input log, replay.
  *
- * A Game is a PURE state machine: step() is the only transition, frame() is the
- * observation the agent sees, evidence() is the privileged channel only the
+ * A Game is a PURE state machine: step() is the only transition, observe() is
+ * the channel the agent reads, evidence() is the privileged channel only the
  * harness reads. Purity is what makes replay verification sound: the same seed
  * plus the same input log must always produce the same evidence, so any claimed
  * progression the replay cannot reproduce is a cheat or a harness bug.
+ *
+ * The agent channel carries text always and pixels optionally. Neither reaches
+ * the input log, the contract, or the attestation: an observation is what the
+ * player sees, and a replay recomputes progress from the seed and the inputs
+ * alone. A run therefore verifies identically whether or not images were shown.
  */
 
 export type Input = string
@@ -22,15 +27,147 @@ export interface Evidence {
   frameState?: Record<string, number>
 }
 
+/**
+ * One rendered image in an observation.
+ *
+ * `base64` holds the encoded file, not raw pixels, so the bytes a driver sends
+ * are the bytes the adapter produced. `width` and `height` are the adapter's
+ * declaration of what it drew, for a driver that lays out a prompt.
+ */
+export interface ObservationImage {
+  mediaType: 'image/png' | 'image/jpeg'
+  base64: string
+  width: number
+  height: number
+  /** Short caption. It is agent-visible, so it must never carry evidence. */
+  label?: string
+}
+
+/**
+ * What the agent perceives on one turn.
+ *
+ * `text` is always present and is exactly what `frame()` returns for a game
+ * that publishes no images, so every existing driver keeps its behaviour.
+ */
+export interface Observation {
+  text: string
+  images?: readonly ObservationImage[]
+}
+
 export interface Game<S> {
   id: string
   init(seed: number): S
   /** Pure transition. Unknown inputs are no-ops (agent typos are not cheats). */
   step(state: S, input: Input): S
-  /** The observation channel the agent receives each turn. */
+  /** The text observation the agent receives each turn. */
   frame(state: S): string
+  /**
+   * The full observation, when the game renders more than text.
+   *
+   * Omitting it means the observation is exactly `{ text: frame(state) }`.
+   * A game that implements it must keep `text` equal to what it would have
+   * returned from `frame()`, because the driver's first argument is that text.
+   */
+  observe?(state: S): Observation
   /** Privileged progression channel — harness-side only. */
   evidence(state: S): Evidence
+}
+
+/**
+ * Bounds on the image channel.
+ *
+ * An image is an unbounded byte channel into a paid context, so the harness
+ * fixes a ceiling rather than trusting an adapter. Measured on ale-py 0.12.1,
+ * a Breakout frame encodes to 518 bytes at native 160x210 and 2,383 bytes at a
+ * 3x upscale, so `MAX_OBSERVATION_IMAGE_BYTES` sits about 440x above the
+ * largest real frame: it never fires on legitimate pixels and still stops a
+ * runaway adapter inside one turn.
+ *
+ * `MAX_OBSERVATION_IMAGE_DIMENSION` is 2048 because model providers resize an
+ * image into their own tile grid at or below that edge, so pixels beyond it are
+ * re-encoded away before the model reads them while the harness still pays for
+ * the bytes.
+ *
+ * Exceeding any bound is a harness error that fails the turn. Nothing is
+ * silently shrunk: a run whose observation quietly changed size is a run whose
+ * result cannot be reproduced from what it reports.
+ */
+export const MAX_OBSERVATION_IMAGE_BYTES = 1 << 20
+export const MAX_OBSERVATION_IMAGE_DIMENSION = 2048
+export const MAX_OBSERVATION_IMAGES = 4
+export const MAX_OBSERVATION_TOTAL_IMAGE_BYTES = 2 << 20
+export const MAX_OBSERVATION_IMAGE_LABEL_CHARS = 200
+
+const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/u
+const MAGIC: Record<ObservationImage['mediaType'], readonly number[]> = {
+  'image/png': [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+  'image/jpeg': [0xff, 0xd8, 0xff],
+}
+
+/**
+ * The observation for one state, with the text-only default applied.
+ *
+ * Every path that shows a state to an agent goes through this function, so the
+ * default and the bounds exist in exactly one place. It reads `frame()` and
+ * `observe()` and never `evidence()`, which is what keeps the privileged
+ * channel out of the agent's view.
+ */
+export function observationOf<S>(game: Game<S>, state: S): Observation {
+  if (game.observe === undefined) return { text: game.frame(state) }
+  const observed = game.observe(state)
+  if (typeof observed?.text !== 'string') {
+    throw new Error(`game ${game.id} observe() returned no text`)
+  }
+  if (observed.images === undefined) return { text: observed.text }
+  const images = [...observed.images]
+  if (images.length > MAX_OBSERVATION_IMAGES) {
+    throw new Error(
+      `game ${game.id} observation carries ${images.length} images, over the ${MAX_OBSERVATION_IMAGES} per turn`,
+    )
+  }
+  let total = 0
+  for (const [index, image] of images.entries()) {
+    total += checkObservationImage(game.id, index, image)
+    if (total > MAX_OBSERVATION_TOTAL_IMAGE_BYTES) {
+      throw new Error(
+        `game ${game.id} observation images total ${total} bytes, over the ${MAX_OBSERVATION_TOTAL_IMAGE_BYTES} per turn`,
+      )
+    }
+  }
+  return { text: observed.text, images }
+}
+
+/** Validate one image against the bounds and return its decoded byte count. */
+function checkObservationImage(gameId: string, index: number, image: ObservationImage): number {
+  const where = `game ${gameId} observation image ${index}`
+  const magic = MAGIC[image.mediaType]
+  if (magic === undefined) throw new Error(`${where} has unsupported mediaType ${String(image.mediaType)}`)
+  for (const side of ['width', 'height'] as const) {
+    const value = image[side]
+    if (!Number.isInteger(value) || value <= 0 || value > MAX_OBSERVATION_IMAGE_DIMENSION) {
+      throw new Error(
+        `${where} declares ${side} ${String(value)}; expected 1..${MAX_OBSERVATION_IMAGE_DIMENSION}`,
+      )
+    }
+  }
+  if (image.label !== undefined
+    && (image.label.length > MAX_OBSERVATION_IMAGE_LABEL_CHARS || /[\r\n\0]/u.test(image.label))) {
+    throw new Error(`${where} has a label over ${MAX_OBSERVATION_IMAGE_LABEL_CHARS} characters or with a control character`)
+  }
+  if (typeof image.base64 !== 'string' || image.base64.length === 0 || image.base64.length % 4 !== 0
+    || !BASE64.test(image.base64)) {
+    throw new Error(`${where} is not canonical base64`)
+  }
+  const padding = image.base64.endsWith('==') ? 2 : image.base64.endsWith('=') ? 1 : 0
+  const bytes = (image.base64.length / 4) * 3 - padding
+  if (bytes > MAX_OBSERVATION_IMAGE_BYTES) {
+    throw new Error(`${where} is ${bytes} bytes, over the ${MAX_OBSERVATION_IMAGE_BYTES} cap`)
+  }
+  const head = Buffer.from(image.base64.slice(0, 16), 'base64')
+  if (head.length < magic.length || magic.some((byte, i) => head[i] !== byte)) {
+    throw new Error(`${where} does not start with ${image.mediaType} magic bytes`)
+  }
+  return bytes
 }
 
 /** FNV-1a 32-bit, hex. Not cryptographic; suffices for deterministic state identity. */

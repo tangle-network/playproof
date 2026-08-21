@@ -1,5 +1,6 @@
 /** Thin stable-retro specialization of the shared out-of-process WorkerRpc protocol. */
 import { fileURLToPath } from 'node:url'
+import type { ObservationImage } from '../runtime'
 import { WorkerRpc, type WorkerEvidence, type WorkerStepResult } from './worker-rpc'
 
 const WORKER_PATH = fileURLToPath(new URL('../retro/worker.py', import.meta.url))
@@ -25,6 +26,10 @@ export interface RetroBootOptions {
   /** Emulator frames advanced per Playproof input. */
   frameskip?: number
   seed?: number
+  /** Publish the rendered screen as a PNG for the agent. Off by default. */
+  screenImage?: boolean
+  /** Whole-pixel upscale of that PNG, 1..8, for the low-resolution consoles. */
+  screenScale?: number
 }
 
 export interface RetroIdentity {
@@ -41,7 +46,12 @@ export interface RetroIdentity {
   /** SHA-1 of the ROM the core loaded, or null when the path is unavailable. */
   romSha: string | null
   frameskip: number
+  /** Whether this boot publishes the rendered screen for the agent. */
+  screenImage: boolean
+  screenScale: number
   frameText: string
+  /** The boot screen, present only when `screenImage` is on. */
+  frameImage?: ObservationImage
 }
 
 export class RetroRpc extends WorkerRpc {

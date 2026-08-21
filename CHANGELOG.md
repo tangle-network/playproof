@@ -2,6 +2,58 @@
 
 All notable changes to Playproof are documented here.
 
+## 0.5.0
+
+### The observation channel
+
+- A game may now show the agent pixels. `Observation` is `{ text, images? }`, an image is `{ mediaType, base64, width, height, label? }`, and a game publishes one by implementing the optional `observe(state)`.
+- The change is additive. `Game.frame()` and `AgentDriver.act(frame, history, context)` keep their signatures and behaviour, a game with no `observe()` has the observation `{ text: frame(state) }`, and a text-only driver is bit-identical.
+- `observationOf(game, state)` is the one function that applies that default and the bounds. Every harness path that shows a state to an agent goes through it.
+- The harness computes one observation per decision and passes it as `context.observation`. `act`'s first argument is still `observation.text`.
+- Trajectory history stays text only. A driver replays its retained history into every prompt, so images in history would multiply the paid image tokens by the history depth on every decision.
+
+### Why
+
+- Measured on ALE Breakout: `stealth/ox-alpha`, a `text+image->text` model, and `liquid/lfm-2.5-2.6b:free` both scored 0 of 6 milestones, and their transcripts show them reading the ASCII downsample as a maze — "exploring the map", "positioned near the goal area" — rather than a paddle-and-ball game. One pressed `FIRE` twice in 45 turns, so no ball was ever in play.
+- `ale/worker.py` was already calling `getScreenRGB()` and hashing those pixels into `frameHash` for verification, then discarding the picture. Playproof captured the real screen for the verifier and never showed it to the agent.
+
+### Bounds
+
+- One image is capped at 1 MiB decoded and 2048 px on either edge; a turn carries at most 4 images and 2 MiB in total. Media type is checked against the file's own magic bytes and base64 must be canonical.
+- 1 MiB is about 440x the largest real frame measured, and 2048 px is where model providers resize an image into their own tile grid, so pixels past it are re-encoded away while the harness still pays for the bytes.
+- A breach is a harness error that fails the turn. Nothing is silently truncated: a run whose observation quietly changed size is a run whose reported result cannot be reproduced.
+
+### Evidence boundary and replay
+
+- `Observation` is the agent's channel and `Evidence` stays harness-only. `scripts/check-boundary.mjs` now fails the build if `observationOf` reads `evidence`, or if any file under `drivers/` names it at all.
+- Images never enter the input log, the contract, or the attestation. `observation.test.mts` asserts a run verifies identically with and without them: same contract hash, same chain head, same verified set, same attestation.
+
+### Drivers
+
+- `createOpenAICompatibleDriver` takes `vision` (off by default) and `imageDetail`. With vision on and images present, the user message becomes OpenAI content parts with `image_url` data URLs; otherwise the request is the same single string as before.
+- `createCliAgentDriver` takes `vision` (off by default) and adds an `images` key to its JSON request. The first-word protocol is unchanged, and `vision` with `stdin: 'prompt'` fails at construction rather than dropping the pixels every turn.
+- A vision run costs image tokens on every decision. Playproof records the reported cost either way and does not discount it.
+
+### Adapters
+
+- `adapters/ale`, `adapters/pyboy-generic`, and `adapters/stable-retro` take `screenImage` and `screenScale`, and publish the screen their worker already captured for `frameHash`. `adapters/retroarch` takes `screenImage` and republishes RetroArch's own `SCREENSHOT` PNG byte for byte.
+- Every one of them is off by default, so the byte cost of an existing run is unchanged.
+- `pyshared/png.py` encodes 8-bit grayscale, RGB, and RGBA with `zlib` and `struct`, filter 0 on every scanline. No image dependency was added: Pillow is absent from CI, and the RetroArch worker needs no encoder at all. Measured on an ale-py 0.12.1 Breakout frame: 518 bytes at the native 160x210 in 0.84 ms, and 2,383 bytes at a 3x upscale in 4.4 ms.
+- `adapters/gymnasium` publishes no image and the docs say why: its environments observe a vector or an `ansi` string, and an `rgb_array` render for the classic-control and toy-text families needs `pygame`.
+- The bytes an agent sees are never the bytes a verifier recomputes. ALE and PyBoy hash the raw buffer rather than the encoded file, and the RetroArch evidence hash covers decoded pixels because RetroArch picks a PNG filter per scanline.
+
+### Fixed
+
+- **PyBoy never rendered.** Every tick in the PyBoy wiring ran with `render=False`, which PyBoy treats as frameskipping and which leaves the LCD output buffer untouched. Measured on the 266-input Libbet reference: the framebuffer hash took ONE distinct value for the whole run, so the `screen-frame` milestone the generic adapter derives was pinned on a constant that every run reproduces, including one that never presses a button.
+- The last frame of each input window now renders. Measured: every privileged variable is identical at all 267 snapshots of the reference, the framebuffer hash takes eight distinct values instead of one, and wall time rises about one per cent. `saveBlobHash` does change, because PyBoy serializes its renderer state into the save, so a PyBoy save-file milestone recorded before 0.5.0 does not reproduce after it.
+- `retroarch/worker.py` returned its whole evidence cache entry, not the evidence, on a cache hit. Any second `evidence` call at one emulator instant answered with an array instead of the evidence object.
+
+### Tests
+
+- `observation.test.mts` joins the `test` chain: the text-only default, an image game through `playEpisode` and `runCampaign`, every bound rejecting, the evidence boundary holding, replay and attestation parity, and both drivers sending pixels only when the caller opted in.
+- `ale.test.mts`, `stable-retro.test.mts`, and `pyboy-libbet.test.mts` gain real-emulator checks. Each decodes the produced PNG, undoes the whole-pixel upscale, and asserts the recovered native buffer hashes to the `frameHash` a verifier recomputes, so the agent is proven to see the screen the verifier checks. Each also asserts the evidence at that instant is identical with the image channel on and off.
+- Measured by those gates: ALE Breakout at 3x is a 480x630 PNG of 2,450 bytes with 9 distinct colours; stable-retro Airstriker at 2x is 640x448 and 1,968 bytes with 9 colours; PyBoy Libbet at 3x is 480x432 and 1,228 bytes with 1 colour, because Libbet under the blind generic preamble draws an all-white screen from about the fortieth reference input onward.
+
 ## 0.4.0
 
 ### Verification

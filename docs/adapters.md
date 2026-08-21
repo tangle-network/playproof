@@ -11,11 +11,11 @@ The core never changes when a new adapter arrives.
 |---|---|---|---|---|---|
 | `adapters/native-2048` | A seeded 2048 implementation in a child process | Rendered text board | Engine state, save file, append-only events, rendered fields | `replay` | Yes, no external assets |
 | `adapters/native-desktop` | An arbitrary desktop executable, launched or attached after launcher handoff | Process stdout or a capture helper | Bounded JSON/binary saves, event files, rendered fields, authorized read-only reads | `trusted-recorder` | No, needs the game |
-| `adapters/pyboy-generic`, `adapters/pyboy-tetris` | Game Boy ROM on PyBoy, headless, out of process | ASCII frame plus a variable summary | RAM-decoded engine state, save-state hash, framebuffer hash | `replay` | No, ROM is user-supplied |
-| `adapters/stable-retro` | Any console stable-retro bundles a libretro core for, out of process | ASCII frame downsample plus a variable summary | Integration variables read from RAM, framebuffer hash, bounded derived frame numbers | `replay` | **Yes**, on the bundled free ROM |
-| `adapters/ale` | Any Atari 2600 ROM `ale-py` bundles, out of process | ASCII frame downsample plus a score, lives, and frame summary | Cumulative score, lives, emulator counters, named RAM bytes, framebuffer hash, emulator-state hash | `replay` | **Yes**, on the bundled ROM set |
-| `adapters/gymnasium` | Any registered Gymnasium environment with a `Discrete` action space, out of process | The `ansi` render, the text observation, or a labelled number list | Cumulative reward, step count, termination flags, numeric `info` entries, the observation hash, and a bounded projection of the observation | `replay`, for seed-deterministic environments only | **Yes**, on environments that ship with the library |
-| `adapters/retroarch` | Any libretro core, inside a RetroArch process the adapter launches and drives as a black box | ASCII downsample of the screenshot plus a one-line channel summary | Caller-declared memory channels read with `READ_CORE_MEMORY`; screenshot hash and derived frame numbers are published but not pinned by default | `replay` | **Yes**, on a downloaded core and the free Libbet ROM |
+| `adapters/pyboy-generic`, `adapters/pyboy-tetris` | Game Boy ROM on PyBoy, headless, out of process | ASCII frame plus a variable summary; `screenImage` adds the rendered PNG (`pyboy-generic`) | RAM-decoded engine state, save-state hash, framebuffer hash | `replay` | No, ROM is user-supplied |
+| `adapters/stable-retro` | Any console stable-retro bundles a libretro core for, out of process | ASCII frame downsample plus a variable summary; `screenImage` adds the rendered PNG | Integration variables read from RAM, framebuffer hash, bounded derived frame numbers | `replay` | **Yes**, on the bundled free ROM |
+| `adapters/ale` | Any Atari 2600 ROM `ale-py` bundles, out of process | ASCII frame downsample plus a score, lives, and frame summary; `screenImage` adds the rendered PNG | Cumulative score, lives, emulator counters, named RAM bytes, framebuffer hash, emulator-state hash | `replay` | **Yes**, on the bundled ROM set |
+| `adapters/gymnasium` | Any registered Gymnasium environment with a `Discrete` action space, out of process | The `ansi` render, the text observation, or a labelled number list; no image, see below | Cumulative reward, step count, termination flags, numeric `info` entries, the observation hash, and a bounded projection of the observation | `replay`, for seed-deterministic environments only | **Yes**, on environments that ship with the library |
+| `adapters/retroarch` | Any libretro core, inside a RetroArch process the adapter launches and drives as a black box | ASCII downsample of the screenshot plus a one-line channel summary; `screenImage` republishes the screenshot itself | Caller-declared memory channels read with `READ_CORE_MEMORY`; screenshot hash and derived frame numbers are published but not pinned by default | `replay` | **Yes**, on a downloaded core and the free Libbet ROM |
 | `platforms/steam` | Nothing; the title runs elsewhere | Not provided by the adapter | Steam Web API achievements and statistics, or a title-side bridge | `platform-attested` | Contract tests only |
 | `platforms/xbox` | Nothing; the title runs elsewhere | Not provided by the adapter | Xbox services achievements and statistics, or a GDK/XSAPI bridge | `platform-attested` | Contract tests only |
 
@@ -23,6 +23,47 @@ Read the mode column strictly.
 `replay` means a verifier re-executed the run and recomputed every milestone.
 `trusted-recorder` means a named recorder signed what it captured and nothing was independently reproduced.
 `platform-attested` means a signed recorder read normalized progress from a platform API; it is not a signature from that platform.
+
+## The observation image channel
+
+Every emulator adapter here was already capturing the screen for evidence and then showing the agent an ASCII downsample of it.
+`screenImage` publishes the picture as well.
+It is off by default on every adapter, so a run that does not ask for it sends the same bytes it always sent.
+
+| Adapter | Produces pixels? | How | Upscale |
+|---|---|---|---|
+| `adapters/ale` | Yes | `getScreenRGB()`, the same buffer `frameHash` covers, encoded by `pyshared/png.py` | `screenScale`, 1..8; native is 160x210 |
+| `adapters/pyboy-generic` | Yes | `screen.ndarray`, the same buffer `frameHash` covers | `screenScale`, 1..8; native is 160x144 |
+| `adapters/stable-retro` | Yes | The environment observation, the same buffer `frameHash` covers | `screenScale`, 1..8 |
+| `adapters/retroarch` | Yes | RetroArch's own `SCREENSHOT` PNG, republished byte for byte | None; the worker has no array library |
+| `adapters/gymnasium` | No | — | — |
+| `adapters/native-desktop` | No | — | — |
+| `platforms/steam`, `platforms/xbox` | No | The title runs elsewhere; these adapters provide no observation at all | — |
+
+**No image dependency was added, and none may be.**
+Pillow is absent from the CI environments — the PyBoy job logs `Missing dependency "Pillow"` — and a harness that grows an imaging stack to show a game screen has overpaid.
+`pyshared/png.py` encodes 8-bit grayscale, RGB, or RGBA with `zlib` and `struct`, filter 0 on every scanline.
+Measured on an ale-py 0.12.1 Breakout frame: 518 bytes at the native 160x210 in 0.84 ms, and 2,383 bytes at a 3x upscale in 4.4 ms.
+
+**PyBoy needed a fix before it could show anything.**
+Every tick in the PyBoy wiring ran with `render=False`, which PyBoy treats as frameskipping and which leaves the LCD output buffer alone.
+Measured on the 266-input Libbet reference, the framebuffer hash took **one** distinct value for the whole run, so the `screen-frame` milestone the generic adapter derives was pinned on a constant that every run reproduces, including one that never presses a button.
+The last frame of each input window now renders. Measured: every privileged variable is identical at all 267 snapshots, the framebuffer hash takes eight distinct values instead of one, and wall time rises about one per cent.
+It does change `saveBlobHash`, because PyBoy serializes its renderer state into the save, so a PyBoy save-file milestone recorded before 0.5.0 does not reproduce after it.
+
+The RetroArch worker needs no encoder at all, because RetroArch writes a PNG for `SCREENSHOT` and the evidence path already reads it.
+Republishing that file is sound precisely because the evidence hash covers the DECODED pixels and never the file: RetroArch picks a filter per scanline, so two builds can encode one image two ways, and the bytes an agent sees are not the bytes a verifier recomputes.
+
+**Gymnasium produces no image, deliberately.**
+Its environments here observe a vector or an `ansi` string rather than a framebuffer, and an `rgb_array` render for the classic-control and toy-text families needs `pygame`.
+That is a new dependency for a picture of a cart and a pole, so the adapter does without and says so.
+
+Each gate proves the identity rather than the plumbing: it undoes the whole-pixel upscale, hashes the recovered native buffer, and asserts it equals the `frameHash` a verifier recomputes.
+Measured on CI hardware — ALE Breakout at 3x: a 480x630 PNG of 2,450 bytes with 9 distinct colours; stable-retro Airstriker at 2x: 640x448, 1,968 bytes, 9 colours; PyBoy Libbet at 3x: 480x432, 1,228 bytes, 1 colour, because Libbet under the blind generic preamble draws an all-white screen from about the fortieth reference input onward.
+
+**The pixels are observation, never evidence.**
+They do not enter the input log, the contract, or the attestation, and an adapter that put privileged state into an image caption would be breaking the same boundary that already forbids putting it into the frame text.
+A screen image is legitimate because it is what a human player sees.
 
 ## What a replay adapter must prove
 
@@ -113,6 +154,9 @@ python -m retro.import /path/to/roms
 
 Then supply a reference playthrough for the game through `options.reference`.
 
+**Screen images.** `makeStableRetro({ game, screenImage: true, screenScale: 2 })` publishes the rendered screen to the agent as a PNG, encoded from the same observation buffer `frameHash` covers.
+Console resolutions vary here, so pick a scale that keeps the frame under 2048 px on its long edge; a larger frame fails the turn rather than being shrunk.
+
 ## Atari through ALE
 
 ```ts
@@ -147,6 +191,15 @@ makeAle({
 `frameHash` is the SHA-256 of the raw RGB screen, and `saveBlobHash` is the SHA-256 of the serialized `ALEState`.
 The agent never sees any of it.
 
+**Screen images.** `screenImage: true` publishes the rendered screen to the agent as a PNG, encoded from the same RGB buffer `frameHash` covers:
+
+```ts
+makeAle({ game: 'breakout', screenImage: true, screenScale: 3 })
+```
+
+An Atari frame is 160x210, well below the tile grid a model provider resizes into, so `screenScale` repeats whole pixels; at 3x the encoded PNG measures about 2.4 KB.
+The gate in `ale.test.mts` decodes the produced PNG, checks the dimensions and that the picture is not one flat colour, and asserts the evidence at the same instant is identical with the image channel on and off.
+
 **Contracts.** A reference file declares the trigger for each milestone.
 `deriveContract` replays the reference and samples the value or hash that actually held at that instant.
 No threshold or hash is written by hand.
@@ -172,6 +225,9 @@ Nothing in the adapter is environment-specific.
 **Inputs.** One word per turn: `NOOP` plus one name per discrete action.
 Names come from `env.unwrapped.get_action_meanings()` when the environment exposes it, and are `a0` … `a{n-1}` otherwise.
 A discrete action space has no guaranteed idle action, so a no-op cannot be "repeat nothing" the way a console controller can.
+
+**No screen images.** These environments observe a vector or an `ansi` string, not a framebuffer, and an `rgb_array` render for the classic-control and toy-text families needs `pygame`.
+That is a new dependency for a picture of a cart and a pole, so this adapter publishes no observation image and this line records why.
 `NOOP` and every unknown word therefore do not call `env.step` at all: the environment is left exactly where it was.
 An agent typo is not a cheat, and it must not silently advance the episode either.
 An environment that names one of its own actions `NOOP`, as ALE does, keeps that real action.
@@ -278,6 +334,10 @@ Those figures come from one CI run and move between runs, which is exactly why t
 Zeroing the console's volatile regions before the reset was measured and did **not** help: with video RAM, work RAM, sprite memory and high RAM cleared, agreement got worse, not better. The `clearRegions` boot option remains available for cores where the same measurement comes out differently, and screen milestones stay behind `screenMilestones` for the same reason.
 
 No `saveBlobHash` is published either. RetroArch compresses save states, and a compressed state is not a stable identity for a game position; the bytes were measured **not** equal between processes at the same instant. Checkpoints stay exact within one worker, which is all snapshot and restore need.
+
+**Screen images.** `screenImage: true` republishes the `SCREENSHOT` PNG to the agent byte for byte.
+It is unrelated to `screenMilestones` above: this is the observation channel, which never enters the input log, the contract, or the attestation, while `screenMilestones` would pin verified progress.
+There is no upscale knob, because this worker has no array library and re-encoding a PNG in pure Python every turn would cost more than the option is worth.
 
 ### Where this is proven
 
