@@ -8,11 +8,8 @@ Playproof publishes one verified archive to npm and attaches the same archive an
 2. Enable GitHub Actions and branch protection for `main`.
 3. Ensure the `@tangle-network` npm organization permits public package publication.
 4. For the first publication, make the organization automation token available as the repository secret `NPM_TOKEN`.
-5. After `@tangle-network/playproof` exists on npm, configure npm Trusted Publishing for:
-   - organization: `tangle-network`;
-   - repository: `playproof`;
-   - workflow: `publish.yml`.
-6. Remove the token from the repository when OIDC publication is proven.
+5. Keep the token in place. npm provenance and npm Trusted Publishing both require a GitHub-hosted runner; they reject a self-hosted one with `Unsupported GitHub Actions runner environment`. This organization publishes from its own pool, so the package ships without a sigstore attestation.
+6. Configure npm Trusted Publishing only when GitHub-hosted runners are available to this repository again.
 
 ## Release gates
 
@@ -53,6 +50,10 @@ The equivalent free-ROM regression (`pnpm test:pyboy-libbet`) runs in CI on ever
 5. The workflow then creates the immutable GitHub release with the same tarball and `SHA256SUMS`.
 
 The workflow is idempotent: retrying an already-published version verifies the artifact identity and skips the npm mutation.
+
+## Release integrity without provenance
+
+A release carries four pieces of evidence instead of a sigstore attestation: the tag resolves to the exact commit the verify job checked out, `package.json` version equals the tag, the complete gate passed on that tree, and the SHA-256 of the one archive that was built is recorded in `SHA256SUMS` on the GitHub release next to the archive itself. Compare the digest of the npm tarball with that receipt to confirm the registry holds the artifact this repository built.
 
 ## Prohibited release paths
 

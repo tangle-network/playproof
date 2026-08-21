@@ -100,8 +100,11 @@ jobs:
       EXPECTED_VERSION: ${{ needs.verify.outputs.version }}
       EXPECTED_SHA256: ${{ needs.verify.outputs.sha256 }}
       RELEASE_TAG: ${{ needs.verify.outputs.tag }}
-      # The first scoped publication may use the organization NPM_TOKEN.
-      # Once npm Trusted Publishing is configured for this workflow, OIDC is tokenless.
+      # npm provenance and npm Trusted Publishing both reject a self-hosted
+      # runner ("Unsupported GitHub Actions runner environment"), and this
+      # organization has no GitHub-hosted runners, so publication uses the
+      # organization NPM_TOKEN and ships no sigstore attestation. The release
+      # evidence is the verify job, the SHA-256 receipt, and the tag identity.
       NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -132,7 +135,7 @@ jobs:
             || node -e 'process.exit(Object.values(JSON.parse(process.argv[1])).includes(process.argv[2]) ? 0 : 1)' "$tags" "$version"; then
             echo "$name@$version already published; skipping"
           else
-            npm publish "$package" --access public --provenance
+            npm publish "$package" --access public
           fi
       - name: Create immutable GitHub release
         run: |
