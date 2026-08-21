@@ -37,6 +37,7 @@ All notable changes to Playproof are documented here.
 
 ### Continuous integration
 
+- Releases publish from the self-hosted pool without npm provenance: the registry rejects a sigstore bundle built on a self-hosted runner. The tag-to-commit check, the full gate, and the SHA-256 receipt on the GitHub release are the integrity evidence.
 - Every workflow job runs on the organization's self-hosted Linux pool with a per-job `uv` virtual environment and a per-job pnpm install directory; the real-emulator gates (Libbet on PyBoy, Airstriker on stable-retro, Breakout on ALE, CartPole and FrozenLake on Gymnasium) all run there.
 - A `real-retroarch` job installs RetroArch, the gambatte core, and the verified free Libbet ROM from their own upstreams and runs the black-box host gate on the same pool. The job reports an explicit warning and skips instead of failing if the pool cannot install the emulator.
 
