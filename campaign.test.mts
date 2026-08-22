@@ -167,6 +167,13 @@ try {
     assert.ok(first.recentHistory.length <= 8)
     assert.ok(first.lastFrame.length > 0)
     assert.ok(first.verifiedSoFar.includes('first-legal-move'))
+    // An analyst reads progress against the earnable denominator, not the raw
+    // milestone count. Every 2048 milestone is a semantic check, so the two
+    // agree here, and the field says so instead of leaving it to be assumed.
+    assert.equal(first.scoreSoFar.verified, first.verifiedSoFar.length)
+    assert.equal(first.scoreSoFar.earned, first.verifiedSoFar.length)
+    assert.equal(first.scoreSoFar.earnable, contract.milestones.length)
+    assert.equal(first.scoreSoFar.total, contract.milestones.length)
     assert.equal(first.ledger.decisions.length, 2)
   }
 

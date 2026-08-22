@@ -270,6 +270,33 @@ Use semantic checks such as `score >= 10` for progression. Exact hashes identify
 
 Dependencies between milestones form a declared partial order. A later achievement cannot verify before its prerequisites, even when its raw condition already holds.
 
+### Earnable milestones and replay-identity checks
+
+A contract holds two kinds of statement, and one score cannot carry both.
+
+- An **achievement** is a threshold, a normalized field, or an event. Two different valid trajectories both satisfy it, so an independent policy earns it by playing.
+- A **replay-identity check** is a hash over the exact bytes one recorded run produced. It proves that a replay reproduced that run, and no independent policy earns it.
+
+The role is derived from the check kind, so no contract changes and no author has to remember to set it.
+`save-hash` and `frame-hash` are identity; `state-path`, `save-path`, `frame-path`, and `log-contains` are achievements.
+`requires` is followed: an achievement gated behind a hash is unreachable too, because a milestone verifies only after every prerequisite has.
+
+```ts
+import { contractEarnability, formatMilestoneScore } from '@tangle-network/playproof'
+
+contractEarnability(contract)
+// { earnable: ['score-opened', 'score-tier-2', 'score-tier-4', 'life-lost'],
+//   unearnable: ['frame-at-first-score', 'save-at-first-score'],
+//   reasons: { 'frame-at-first-score': "its frame-hash check pins the reference run's exact bytes", … } }
+
+formatMilestoneScore(record.score) // '3 of 4 earnable (3 of 6 verified, 2 replay-identity)'
+```
+
+`Attestation` and `EpisodeRecord` carry `verified` unchanged, plus `earned` and `score`.
+A campaign segment report carries `scoreSoFar`.
+Report a run as earned over earnable.
+Identity checks stay in the contract and stay in `verified`; they are what replay attestation proves.
+
 ## Calibration: does the contract separate?
 
 A milestone contract says which progressions count.
@@ -292,9 +319,37 @@ assertContractSeparates(report)
 `calibrateContract` replays the reference and a suite of trivial policies through the same attestation path: one constant policy per input word, a word the game cannot interpret, a round-robin cycle over the vocabulary, and a seeded pseudo-random walk over it.
 Every policy is deterministic in the seed, so a report reproduces from one number.
 
-The report names `separating` (milestones no baseline earned), `trivial` (milestones at least one baseline earned), and `bestBaselineCount`.
-`separates` is true only when something is out of reach of every baseline **and** the reference verifies strictly more milestones than the strongest baseline.
+The report names `separating` (earnable milestones no baseline earned), `trivial` (milestones at least one baseline earned), `earnable` and `unearnable`, and both baseline counts.
+`separates` is true only when an **earnable** milestone is out of reach of every baseline **and** the reference earns strictly more earnable milestones than the strongest baseline.
 `assertContractSeparates` throws otherwise, and the message names every trivial milestone with the baseline that earned it.
+
+### The gate also refuses points no policy can score
+
+A replay-identity check is never earned by a baseline, so the separation test alone reads it as the contract's strongest evidence.
+It is the opposite: a milestone out of reach of every policy measures nothing, and it inflates the denominator of every score quoted from the contract.
+
+Measured on ALE Breakout: the derived contract has six milestones and two of them are hashes of the screen and the save state at the first point.
+An authored policy that verified `score-opened`, `score-tier-2`, and `life-lost` read as 3 of 6.
+It could never have reached 6.
+The honest number is 3 of 4.
+
+```ts
+assertContractSeparates(report, {
+  identityChecks: ['frame-at-first-score', 'save-at-first-score'],
+})
+```
+
+The declaration is an exact set, not a switch: an undeclared hash milestone, a stale id, and an identity hash that a trivial baseline reproduced all fail the gate.
+A hash milestone that a later derivation adds therefore cannot enter a published contract unnoticed.
+`assertMilestonesEarnable` runs the same check alone, for a demonstration target that is not meant to separate.
+
+| Contract | Milestones | Earnable | Reference score | Best trivial baseline |
+|---|---|---|---|---|
+| ALE Breakout | 6 | 4 | 4 of 4 earnable | 0 earnable |
+| Libbet through `pyboy-generic` | 6 | 4 | 3 of 4 earnable | 3 earnable |
+
+Breakout separates and its score was quoted out of the wrong denominator.
+Libbet does not separate, and its earnable milestones are exactly the ones a constant button press already earns.
 
 ### The measurement that made this exist
 

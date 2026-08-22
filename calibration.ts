@@ -12,13 +12,23 @@
  * comparison. `assertContractSeparates` is the fail-closed gate a target author
  * calls before publishing a contract.
  *
+ * A trivial baseline is not the only way a contract fails to measure. A
+ * milestone can also be out of reach of EVERY policy, because a hash check
+ * pins the reference run's exact bytes. Such a milestone is never earned by a
+ * baseline, so the separation test alone reads it as the contract's strongest
+ * evidence, when in fact nothing but a replay of the reference reproduces it.
+ * The report therefore splits the contract into earnable and unearnable
+ * milestones, and the gate refuses a contract whose unearnable milestones the
+ * author has not declared.
+ *
  * Everything here is pure and synchronous, and depends only on the runtime,
  * schema, and attestation planes. It imports no adapter and no model provider.
  */
 import { attestRun } from './attestation'
 import { logFrom } from './runtime'
 import type { Game } from './runtime'
-import type { MilestoneContract } from './schema'
+import { contractEarnability, formatMilestoneScore, scoreMilestones } from './schema'
+import type { MilestoneContract, MilestoneScore } from './schema'
 
 /**
  * A deterministic input policy that needs no observation of the game.
@@ -101,12 +111,43 @@ export interface CalibrationReport {
   vocabulary: string[]
   reference: BaselineOutcome
   baselines: BaselineOutcome[]
-  /** milestones no baseline earned */
+  /**
+   * Earnable milestones the reference reached and no baseline did — the whole
+   * of the contract's discriminating power. A replay-identity milestone is
+   * excluded even though no baseline earned it, because being out of reach of
+   * every policy is not separation.
+   */
   separating: string[]
   /** milestones at least one baseline earned */
   trivial: string[]
+  /** contract milestones an independent policy can earn by playing */
+  earnable: string[]
+  /**
+   * Contract milestones only a replay of the reference earns: a hash check on
+   * the reference run's exact bytes, or a milestone gated behind one.
+   */
+  unearnable: string[]
+  /** why each unearnable milestone is out of reach, keyed by milestone id */
+  unearnableReasons: Record<string, string>
+  /**
+   * Unearnable milestones a trivial baseline reproduced anyway.
+   *
+   * A non-empty set is a measured finding about the game, not about the
+   * policy: the hash covers so little entropy that another trajectory collides
+   * with it, so it identifies nothing. Such a milestone is also listed in
+   * `trivial`.
+   */
+  unearnableReproduced: string[]
   /** the strongest baseline's verified count */
   bestBaselineCount: number
+  /**
+   * The strongest baseline's EARNABLE count. This is the number a reference
+   * must beat: a raw verified count flatters the reference, which reproduces
+   * every replay-identity check by construction.
+   */
+  bestBaselineEarnedCount: number
+  /** the reference's own progress, with the earnable denominator separated */
+  referenceScore: MilestoneScore
   separates: boolean
 }
 
@@ -164,9 +205,14 @@ export function calibrateContract<S>(
 
   const earnedByBaseline = new Set(baselines.flatMap((b) => b.verified))
   const order = contract.milestones.map((m) => m.id)
-  const separating = reference.verified.filter((id) => !earnedByBaseline.has(id))
+  const { earnable, unearnable, reasons } = contractEarnability(contract)
+  const earnableSet = new Set(earnable)
+  const separating = reference.verified.filter((id) => !earnedByBaseline.has(id) && earnableSet.has(id))
   const trivial = order.filter((id) => earnedByBaseline.has(id))
   const bestBaselineCount = baselines.reduce((best, b) => Math.max(best, b.verified.length), 0)
+  const earnedCount = (outcome: BaselineOutcome): number => outcome.verified.filter((id) => earnableSet.has(id)).length
+  const bestBaselineEarnedCount = baselines.reduce((best, b) => Math.max(best, earnedCount(b)), 0)
+  const referenceScore = scoreMilestones(contract, reference.verified)
 
   return {
     turns,
@@ -176,30 +222,145 @@ export function calibrateContract<S>(
     baselines,
     separating,
     trivial,
+    earnable,
+    unearnable,
+    unearnableReasons: reasons,
+    unearnableReproduced: unearnable.filter((id) => earnedByBaseline.has(id)),
     bestBaselineCount,
-    separates: separating.length > 0 && reference.verified.length > bestBaselineCount,
+    bestBaselineEarnedCount,
+    referenceScore,
+    separates: separating.length > 0 && referenceScore.earned > bestBaselineEarnedCount,
   }
 }
 
 /**
- * Fail closed on a contract that a trivial policy satisfies.
+ * The replay-identity checks a contract is allowed to carry.
+ *
+ * The declaration is an exact set, not a switch. An author who pins a hash
+ * writes the id down, so a hash milestone that a later derivation adds cannot
+ * enter a published contract unnoticed.
+ */
+export interface EarnabilityDeclaration {
+  /** Milestone ids the author accepts as replay-identity pins. */
+  identityChecks?: readonly string[]
+}
+
+function earners(report: CalibrationReport, milestone: string): string {
+  return report.baselines.filter((b) => b.verified.includes(milestone)).map((b) => b.id).join(', ')
+}
+
+/**
+ * Every way a contract's earnable/unearnable split can be wrong, as message
+ * blocks. An empty array means the split is sound and declared.
+ */
+function earnabilityProblems(report: CalibrationReport, declaration: EarnabilityDeclaration): string[] {
+  const problems: string[] = []
+  const { total } = report.referenceScore
+  const declared = declaration.identityChecks
+  const share = total === 0 ? 0 : Math.round((report.unearnable.length / total) * 100)
+  const detail = report.unearnable.map((id) => `  unearnable: ${id} — ${report.unearnableReasons[id]}`)
+
+  if (declared === undefined) {
+    if (report.unearnable.length > 0) {
+      problems.push(
+        [
+          `contract has ${report.unearnable.length} of ${total} milestone(s) no policy can earn ` +
+            `(${report.earnable.length} earnable, ${share}% unearnable)`,
+          ...detail,
+          `  the reference itself scored ${formatMilestoneScore(report.referenceScore)}, so a score out of ` +
+            `${total} is not reachable by an independent policy`,
+          'A replay-identity check proves that a replay reproduced the recorded run. It is not progress.',
+          `Keep it and declare it — assertContractSeparates(report, { identityChecks: ` +
+            `[${report.unearnable.map((id) => `'${id}'`).join(', ')}] }) — or state the progression with a ` +
+            'state-path, save-path, frame-path, or log-contains check.',
+        ].join('\n'),
+      )
+    }
+  } else {
+    const accepted = new Set(declared)
+    const pinned = new Set(report.unearnable)
+    const undeclared = report.unearnable.filter((id) => !accepted.has(id))
+    const stale = [...accepted].filter((id) => !pinned.has(id))
+    if (undeclared.length > 0) {
+      problems.push(
+        [
+          `contract has ${undeclared.length} undeclared milestone(s) no policy can earn: ${undeclared.join(', ')}`,
+          ...detail,
+          'Declare every replay-identity check, or state the progression with a semantic check.',
+        ].join('\n'),
+      )
+    }
+    if (stale.length > 0) {
+      problems.push(
+        `identityChecks names ${stale.length} milestone(s) the contract does not pin: ${stale.join(', ')} — ` +
+          'the declaration is stale, and it would hide a hash milestone added later',
+      )
+    }
+  }
+
+  if (report.unearnableReproduced.length > 0) {
+    problems.push(
+      [
+        `${report.unearnableReproduced.length} replay-identity milestone(s) were reproduced by a trivial baseline:`,
+        ...report.unearnableReproduced.map((id) => `  ${id} — reproduced by ${earners(report, id)}`),
+        'A hash that another trajectory reproduces identifies no run. Remove it or hash more state.',
+      ].join('\n'),
+    )
+  }
+  return problems
+}
+
+/**
+ * Fail closed on a contract whose milestones no policy can earn.
+ *
+ * Identity checks are correct and useful: replay attestation is exactly the
+ * claim that one run reproduced another's bytes. They must not be counted as
+ * achievements, and an undeclared one must not reach a published contract,
+ * because it puts points in the denominator that only the reference can score.
+ *
+ * Call this for a contract that is not meant to separate — a demonstration
+ * target — where `assertContractSeparates` would fail for the other reason.
+ */
+export function assertMilestonesEarnable(
+  report: CalibrationReport,
+  declaration: EarnabilityDeclaration = {},
+): void {
+  const problems = earnabilityProblems(report, declaration)
+  if (problems.length > 0) throw new Error(problems.join('\n'))
+}
+
+/**
+ * Fail closed on a contract that a trivial policy satisfies, and on one that
+ * carries milestones no policy can earn.
  *
  * Call this wherever a target is published. A contract that does not separate
  * still produces scores; those scores report how many frames elapsed, and
- * comparing two agents on them compares nothing.
+ * comparing two agents on them compares nothing. A contract whose points are
+ * partly unearnable still produces scores too, and every one of them is quoted
+ * against a denominator no agent can reach.
+ *
+ * Both failures are reported together, so one run of the gate names everything
+ * an author must fix.
  */
-export function assertContractSeparates(report: CalibrationReport): void {
-  if (report.separates) return
-  const best = report.baselines.filter((b) => b.verified.length === report.bestBaselineCount).map((b) => b.id)
-  const earners = (milestone: string): string =>
-    report.baselines.filter((b) => b.verified.includes(milestone)).map((b) => b.id).join(', ')
-  const lines = [
-    `contract does not separate: the reference verified ${report.reference.verified.length} milestone(s) ` +
-      `and the best trivial baseline verified ${report.bestBaselineCount} over ${report.turns} turns ` +
-      `(seed ${report.seed}, strongest: ${best.join(', ') || 'none'})`,
-    ...report.trivial.map((id) => `  trivial: ${id} — earned by ${earners(id)}`),
-    `  out of reach of every baseline: ${report.separating.join(', ') || 'nothing'}`,
-    'A derived contract is a hypothesis until it separates. Pin a progression a trivial policy cannot reach.',
-  ]
-  throw new Error(lines.join('\n'))
+export function assertContractSeparates(
+  report: CalibrationReport,
+  declaration: EarnabilityDeclaration = {},
+): void {
+  const problems = earnabilityProblems(report, declaration)
+  if (!report.separates) {
+    const best = report.baselines.filter((b) => b.verified.length === report.bestBaselineCount).map((b) => b.id)
+    problems.push(
+      [
+        `contract does not separate: the reference verified ${report.reference.verified.length} milestone(s) ` +
+          `and the best trivial baseline verified ${report.bestBaselineCount} over ${report.turns} turns ` +
+          `(seed ${report.seed}, strongest: ${best.join(', ') || 'none'})`,
+        `  on earnable milestones alone: reference ${report.referenceScore.earned}, ` +
+          `best baseline ${report.bestBaselineEarnedCount}, of ${report.referenceScore.earnable} earnable`,
+        ...report.trivial.map((id) => `  trivial: ${id} — earned by ${earners(report, id)}`),
+        `  earnable and out of reach of every baseline: ${report.separating.join(', ') || 'nothing'}`,
+        'A derived contract is a hypothesis until it separates. Pin a progression a trivial policy cannot reach.',
+      ].join('\n'),
+    )
+  }
+  if (problems.length > 0) throw new Error(problems.join('\n'))
 }

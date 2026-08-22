@@ -1,7 +1,7 @@
 import type { InputStats } from './attestation'
 import { advanceRollout, finalizeRecord, startRollout } from './episode-loop'
 import type { InputLog, Game, Observation } from './runtime'
-import type { MilestoneContract } from './schema'
+import type { MilestoneContract, MilestoneScore } from './schema'
 
 /**
  * One prior action and the observation text produced by that action.
@@ -97,7 +97,16 @@ export interface EpisodeRecord {
   spentUsd: number
   budgetUsd: number
   budgetExhausted: boolean
+  /** Every milestone the replay reproduced, replay-identity checks included. */
   verified: string[]
+  /** The subset of `verified` an independent policy can earn by playing. */
+  earned: string[]
+  /**
+   * The run's progress with the earnable denominator separated from the total.
+   * Report `earned` of `earnable`; `verified` of `total` counts hash checks
+   * that only a replay of the reference reproduces.
+   */
+  score: MilestoneScore
   milestones: MilestoneCostRow[]
   replayDivergence: boolean
   latencyMs: number[]

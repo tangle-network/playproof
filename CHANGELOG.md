@@ -2,6 +2,41 @@
 
 All notable changes to Playproof are documented here.
 
+## 0.6.0
+
+### Earnable milestones are separated from replay-identity checks
+
+- **The defect.** `deriveContract` samples frame hashes and save hashes from the reference trajectory and emits them as milestones. On ALE Breakout the derived contract has six milestones, and two of them — `frame-at-first-score` and `save-at-first-score` — pin the exact bytes the reference produced. No independent policy earns them. An authored policy that verified `score-opened`, `score-tier-2`, and `life-lost` read as 3 of 6; a hand-written ball tracker reached the same three. A third of that contract's points were reachable only by a replay of the reference, and every score quoted from it carried that denominator.
+- A milestone's role is now derived from its check kind. `save-hash` and `frame-hash` are replay-identity; `state-path`, `save-path`, `frame-path`, and `log-contains` are achievements. Nothing is stored on the milestone, so every existing contract keeps its bytes and its hash, and no author can forget to set it.
+- `contractEarnability(contract)` follows `requires` as well. An achievement gated behind a hash is unreachable too, because `MilestoneTracker` admits a milestone only after every prerequisite has passed. The packaged `save-levels` contract is the case in the repo: its `log-contains` milestone is semantic and still unearnable, through its save-hash prerequisite.
+- `Attestation` and `EpisodeRecord` keep `verified` unchanged and gain `earned` and `score`. `MilestoneScore` is `{ verified, earned, earnable, total }`, and `formatMilestoneScore` writes it as `3 of 4 earnable (3 of 6 verified, 2 replay-identity)`. A campaign segment report gains `scoreSoFar`, so an analyst reads progress against the earnable denominator mid-run.
+- The campaign ledger is unchanged. Its `verified` list and the contract it pins by hash reproduce the score through `scoreMilestones`, so a ledger written by 0.5.0 still loads.
+
+### Calibration refuses a contract with points no policy can score
+
+- **A second defect, in the gate itself.** A replay-identity milestone is never earned by a trivial baseline, so it landed in `separating` and the separation test read it as the contract's strongest evidence. Measured on 0.5.0: a contract whose two milestones are hashes over the whole input chain reports `separates: true` with every baseline earning nothing. Unreachable read as hard.
+- `CalibrationReport.separating` now holds earnable milestones only, and `separates` compares earnable counts through the new `bestBaselineEarnedCount`. A baseline that beats the reference on real progress can no longer be outvoted by hashes the reference reproduces by construction.
+- The report gains `earnable`, `unearnable`, `unearnableReasons`, `unearnableReproduced`, and `referenceScore`.
+- `assertContractSeparates(report, { identityChecks })` takes an exact declaration of the identity checks the author accepts. An undeclared one, a stale id, and an identity hash that a trivial baseline reproduced all fail the gate, so a hash milestone added by a later derivation cannot enter a published contract unnoticed. `assertMilestonesEarnable` runs the same check alone, for a target that is not meant to separate.
+- Identity checks are not removed and not discouraged. Replay attestation is exactly the claim that one run reproduced another's bytes. The fix is to stop counting them as achievements.
+
+### Measured
+
+| Contract | Milestones | Earnable | Reference | Best trivial baseline |
+|---|---|---|---|---|
+| ALE Breakout, 210 turns, seed 0 | 6 | 4 | 4 of 4 earnable (6 of 6 verified) | 0 earnable |
+| Libbet through `pyboy-generic`, 70 turns, seed 0 | 6 | 4 | 3 of 4 earnable (3 of 6 verified) | 3 earnable |
+| `save-levels` toy | 2 | 0 | 0 of 0 earnable (2 of 2 verified) | 0 earnable |
+| `screen-puzzle` toy | 2 | 0 | 0 of 0 earnable (2 of 2 verified) | 2 verified |
+
+- Breakout separates on its earnable milestones and its scores were quoted out of the wrong denominator. Libbet still does not separate, and its four earnable milestones are exactly the ones a constant `a` press already earns.
+- `screen-puzzle` renders from one coordinate, so `constant:r` walks to the same square and reproduces both pinned frames. A hash another trajectory reproduces identifies no run, and the gate now says so.
+
+### Replay attestation is unaffected
+
+- `verified` keeps its meaning and its contents. The three packaged toy contract hashes are byte-identical across the change, and `calibration.test.mts` pins them, together with the serialized milestone key set, so a contract that gains a field fails the build.
+- `ale.test.mts` and `pyboy-libbet.test.mts` verify the same milestone ids on the same runs as before, and now also report the split.
+
 ## 0.5.0
 
 ### The observation channel

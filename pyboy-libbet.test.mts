@@ -20,9 +20,9 @@ import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { autoMarks, loadDiscovery, makePyBoyGeneric } from './adapters/pyboy-generic'
 import { attestRun } from './attestation'
-import { assertContractSeparates, calibrateContract, UNKNOWN_BASELINE_WORD } from './calibration'
+import { assertContractSeparates, assertMilestonesEarnable, calibrateContract, UNKNOWN_BASELINE_WORD } from './calibration'
 import { logFrom, observationOf } from './runtime'
-import { validateContract } from './schema'
+import { contractEarnability, formatMilestoneScore, validateContract } from './schema'
 import { decodePng, unscale } from './test-png.mts'
 
 /** The Game Boy pad, matching `BUTTONS` in pyboy/tetris.py. */
@@ -172,7 +172,35 @@ try {
   // word earns nothing, so this is not a pure function of elapsed frames.
   assert.deepEqual(report.baselines.find((b) => b.id === `constant:${UNKNOWN_BASELINE_WORD}`)?.verified, [])
 
-  console.log(`pyboy-libbet: calibration regression — reference ${report.reference.verified.length} milestones, best trivial baseline ${report.bestBaselineCount} over ${report.turns} turns, separates=${report.separates} OK`)
+  // (e2) The earnable split on the derived contract. `autoMarks` anchors one
+  // save-hash and one frame-hash milestone at the confirmed channel's first
+  // progression, so two of the six points can only be scored by a replay of
+  // this exploration trajectory.
+  const earnability = contractEarnability(adapter.contract)
+  assert.deepEqual(earnability.unearnable, ['state-at-first-progression', 'frame-at-first-progression'])
+  assert.equal(earnability.earnable.length, 4)
+  assert.ok(earnability.earnable.every((id) => id.endsWith('-progressed')))
+  assert.deepEqual(report.earnable, earnability.earnable)
+  assert.deepEqual(report.referenceScore, { verified: 3, earned: 3, earnable: 4, total: 6 })
+  assert.equal(formatMilestoneScore(report.referenceScore), '3 of 4 earnable (3 of 6 verified, 2 replay-identity)')
+  // No baseline reproduced either hash, so both are real identity checks here.
+  assert.deepEqual(report.unearnableReproduced, [])
+  // Undeclared, the contract fails the earnability gate on its own, which is a
+  // second, independent reason this target must not be published as a score.
+  assert.throws(
+    () => assertMilestonesEarnable(report),
+    (error: unknown) => {
+      const message = (error as Error).message
+      assert.match(message, /2 of 6 milestone\(s\) no policy can earn/u)
+      assert.match(message, /4 earnable, 33% unearnable/u)
+      return true
+    },
+  )
+  const declared = { identityChecks: ['state-at-first-progression', 'frame-at-first-progression'] }
+  assertMilestonesEarnable(report, declared)
+  assert.throws(() => assertContractSeparates(report, declared), /does not separate/u)
+
+  console.log(`pyboy-libbet: calibration regression — reference ${formatMilestoneScore(report.referenceScore)}, best trivial baseline ${report.bestBaselineCount} verified / ${report.bestBaselineEarnedCount} earnable over ${report.turns} turns, separates=${report.separates} OK`)
 
   // (f) The observation image channel on the real emulator. PyBoy's own
   // screen.image needs Pillow, which is absent here — the boot logs say so —
