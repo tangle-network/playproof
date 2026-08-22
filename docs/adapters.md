@@ -118,6 +118,36 @@ Over the same 70 turns, on the same ROM and the same contract:
 The finding is not a Libbet defect and not a PyBoy defect.
 It is what a derived contract is worth before somebody measures it.
 
+### Earnable milestones and replay-identity checks
+
+A derived contract fails in a second way, and the separation test alone cannot see it.
+`deriveContract` samples whatever the mark asks for, so a mark that asks for a frame hash or a save hash pins the exact bytes the reference run produced.
+No independent policy earns such a milestone. Reaching it means reproducing the reference, not playing.
+Because no trivial baseline earns it either, the separation test used to read it as the contract's strongest evidence.
+
+`contractEarnability(contract)` splits the milestones by check kind, and follows `requires`: a threshold gated behind a hash is unreachable too.
+`assertContractSeparates` and `assertMilestonesEarnable` refuse a contract whose unearnable milestones the author has not declared by id.
+The declaration is an exact set, so a hash milestone that a later derivation adds cannot enter a published contract unnoticed.
+
+Measured on the packaged references:
+
+| Contract | Milestones | Earnable | Replay-identity |
+|---|---|---|---|
+| ALE Breakout | 6 | 4 | 2 — `frame-at-first-score`, `save-at-first-score` |
+| Libbet through `pyboy-generic` | 6 | 4 | 2 — `state-at-first-progression`, `frame-at-first-progression` |
+| `save-levels` toy | 2 | 0 | 2 — the save hash, and the event gated behind it |
+| `screen-puzzle` toy | 2 | 0 | 2 — both frame hashes |
+
+Keep the identity checks. They are the whole of what replay attestation proves.
+Declare them, and report the score as earned over earnable:
+
+```ts
+const report = calibrateContract(game, contract, { reference, vocabulary })
+assertContractSeparates(report, {
+  identityChecks: ['frame-at-first-score', 'save-at-first-score'],
+})
+```
+
 ## Libretro consoles through stable-retro
 
 ```ts
