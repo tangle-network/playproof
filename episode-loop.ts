@@ -183,7 +183,6 @@ export function finalizeRecord<S>(
     budgetUsd,
     budgetExhausted: rollout.spent >= budgetUsd,
     verified: attestation.verified,
-    earned: attestation.earned,
     score: attestation.score,
     milestones: [...rollout.milestones],
     replayDivergence: JSON.stringify(rollout.observed) !== JSON.stringify(attestation.verified),

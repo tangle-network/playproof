@@ -121,10 +121,7 @@ export interface SegmentReport {
   newMilestones: MilestoneCostRow[]
   /** Milestones the live tracker observed so far, in observation order. */
   verifiedSoFar: string[]
-  /**
-   * Progress so far with the earnable denominator separated from the total, so
-   * an analyst reads "3 of 4 earnable" instead of "3 of 6".
-   */
+  /** Progress so far as verified over the contract's milestone count. */
   scoreSoFar: MilestoneScore
   lastFrame: string
   recentHistory: AgentHistoryEntry[]

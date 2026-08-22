@@ -14,11 +14,8 @@ import { saveLevels, saveLevelsContract, SAVE_LEVELS_REFERENCE } from './adapter
   assert.equal(record.verdict, 'clean')
   assert.deepEqual(record.verified, ['hp-untouched', 'room-1', 'room-2-plus', 'room-3'])
   assert.equal(record.spentUsd, 0)
-  // Every crawler milestone is an engine-state threshold, so the earned set is
-  // the verified set and the score has no hidden denominator.
-  assert.deepEqual(record.earned, record.verified)
-  assert.deepEqual(record.score, { verified: 4, earned: 4, earnable: 4, total: 4 })
-  assert.equal(formatMilestoneScore(record.score), '4 of 4 earnable')
+  assert.deepEqual(record.score, { verified: 4, total: 4 })
+  assert.equal(formatMilestoneScore(record.score), '4 of 4')
 }
 
 {
@@ -35,19 +32,21 @@ import { saveLevels, saveLevelsContract, SAVE_LEVELS_REFERENCE } from './adapter
   const { record } = await playEpisode(engineCrawler, engineCrawlerContract(), scriptedDriver(ENGINE_CRAWLER_REFERENCE), 1, 2)
   assert.equal(record.turns, 2)
   assert.deepEqual(record.verified, ['hp-untouched', 'room-1'])
-  assert.deepEqual(record.score, { verified: 2, earned: 2, earnable: 4, total: 4 })
+  assert.deepEqual(record.score, { verified: 2, total: 4 })
 }
 
-// A run on a contract whose milestones are all hash checks verifies them and
-// earns none of them. The record reports both, so nobody quotes the run as two
-// out of two.
+// A run on a contract whose milestones are all hash checks scores them like
+// any other points. A hash names one game state; reaching it is progress a
+// reader cannot read, not progress that did not happen.
 {
   const { record } = await playEpisode(saveLevels, saveLevelsContract(), scriptedDriver(SAVE_LEVELS_REFERENCE), 1, 8)
   assert.equal(record.verdict, 'clean')
   assert.deepEqual(record.verified, ['level-2-saved', 'level-2-logged'])
-  assert.deepEqual(record.earned, [])
-  assert.deepEqual(record.score, { verified: 2, earned: 0, earnable: 0, total: 2 })
-  assert.equal(formatMilestoneScore(record.score), '0 of 0 earnable (2 of 2 verified, 2 replay-identity)')
+  // Both milestones are hashes, and both are points a run scores by reaching
+  // the state they name. The denominator does not shrink because a check is
+  // opaque; what shrinks is what a reader can tell about it.
+  assert.deepEqual(record.score, { verified: 2, total: 2 })
+  assert.equal(formatMilestoneScore(record.score), '2 of 2')
 }
 
 // A scripted driver is positioned by the harness turn, so a driver created in a

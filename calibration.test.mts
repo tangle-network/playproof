@@ -9,26 +9,26 @@
  * out-of-process game.
  *
  * The second half covers the other way a contract fails to measure: a milestone
- * NO policy can earn, because a hash check pins the reference run's exact
- * bytes. The trace game makes that case unambiguous, because its hash covers
- * the whole input sequence.
+ * stated as a hash, which a reader cannot judge. The trace game hashes the
+ * whole input sequence, so exactly one trajectory satisfies it. The ledge walk
+ * hashes a state many trajectories reach, and only the substitution sweep
+ * finds that.
  */
 import { strict as assert } from 'node:assert'
 import { createHash } from 'node:crypto'
 import { deriveContract } from './authoring'
 import {
   assertContractSeparates,
-  assertMilestonesEarnable,
+  assertOpaqueChecksDeclared,
   calibrateContract,
   trivialBaselines,
   UNKNOWN_BASELINE_WORD,
 } from './calibration'
-import type { Game } from './runtime'
+import { hashString, type Game } from './runtime'
 import {
   canonicalContractJson,
-  contractEarnability,
   contractHash,
-  earnedMilestones,
+  contractLegibility,
   formatMilestoneScore,
   scoreMilestones,
 } from './schema'
@@ -286,34 +286,41 @@ try {
   adapter.dispose()
 }
 
-// --- earnable milestones vs replay-identity checks ---------------------------
+// --- legible checks vs opaque ones -------------------------------------------
+//
+// A hash check identifies a STATE, not a trajectory. It is earnable: any policy
+// that stands in that state satisfies it, whether or not it ever saw the
+// reference. What a hash cannot do is tell a reader what it demands, and that
+// is the axis these cases pin.
 
-// (f) an all-achievement contract is unchanged: every milestone is earnable,
-// nothing is declared, and the gate passes exactly as it did before.
+// (f) an all-legible contract: nothing to declare, and the gate passes exactly
+// as it did before opacity existed.
 {
   const report = calibrateContract(comboLock, lockContract, {
     reference: LOCK_REFERENCE,
     vocabulary: LOCK_VOCABULARY,
   })
-  assert.deepEqual(report.earnable, ['moved', 'lock-opened'])
-  assert.deepEqual(report.unearnable, [])
-  assert.deepEqual(report.unearnableReasons, {})
-  assert.deepEqual(report.unearnableReproduced, [])
-  assert.deepEqual(report.referenceScore, { verified: 2, earned: 2, earnable: 2, total: 2 })
-  assert.equal(formatMilestoneScore(report.referenceScore), '2 of 2 earnable')
-  assert.equal(report.bestBaselineEarnedCount, 1)
+  assert.deepEqual(report.legible, ['moved', 'lock-opened'])
+  assert.deepEqual(report.opaque, [])
+  assert.deepEqual(report.opacityReasons, {})
+  assert.deepEqual(report.opaqueReproduced, [])
+  assert.deepEqual(report.collisions, [])
+  assert.deepEqual(report.referenceScore, { verified: 2, total: 2 })
+  assert.equal(formatMilestoneScore(report.referenceScore), '2 of 2')
+  assert.equal(report.bestBaselineLegibleCount, 1)
   assert.equal(report.separates, true)
   assertContractSeparates(report)
-  assertMilestonesEarnable(report)
+  assertOpaqueChecksDeclared(report)
 }
 
-// (g) a contract mixing both kinds reports the right earnable count, and the
-// identity check must be declared before the contract ships.
+// (g) a contract mixing both kinds. `frame-at-open` hashes the whole input
+// chain, so exactly one trajectory reaches the state it names — the sweep
+// proves that, rather than assuming it from the check kind.
 //
-// `frame-at-open` is a hash over the whole input chain, so only a replay of the
-// reference reproduces it. It is a correct attestation check and it stays in
-// the contract; it is not a third point an agent can score.
-const lockIdentityContract = deriveContract(comboLock, 0, [...LOCK_REFERENCE], [
+// The hash is still a point an independent policy can score, so it stays in
+// the denominator: a run that opens the lock without landing on the pinned
+// frame scores 2 of 3, not 2 of 2.
+const lockOpaqueContract = deriveContract(comboLock, 0, [...LOCK_REFERENCE], [
   {
     id: 'moved',
     tier: 'engine-state',
@@ -340,20 +347,26 @@ const lockIdentityContract = deriveContract(comboLock, 0, [...LOCK_REFERENCE], [
 ])
 
 {
-  const report = calibrateContract(comboLock, lockIdentityContract, {
+  const report = calibrateContract(comboLock, lockOpaqueContract, {
     reference: LOCK_REFERENCE,
     vocabulary: LOCK_VOCABULARY,
   })
   assert.deepEqual(report.reference.verified, ['moved', 'lock-opened', 'frame-at-open'])
-  assert.deepEqual(report.earnable, ['moved', 'lock-opened'])
-  assert.deepEqual(report.unearnable, ['frame-at-open'])
-  assert.match(report.unearnableReasons['frame-at-open'] ?? '', /frame-hash check pins the reference run's exact bytes/u)
-  assert.deepEqual(report.unearnableReproduced, [])
-  // The reference scored three of three, and only two of them were earnable.
-  assert.deepEqual(report.referenceScore, { verified: 3, earned: 2, earnable: 2, total: 3 })
-  assert.equal(formatMilestoneScore(report.referenceScore), '2 of 2 earnable (3 of 3 verified, 1 replay-identity)')
-  // The identity check is out of reach of every baseline, and that is not
-  // separation: `separating` names the earnable milestone only.
+  assert.deepEqual(report.legible, ['moved', 'lock-opened'])
+  assert.deepEqual(report.opaque, ['frame-at-open'])
+  assert.match(report.opacityReasons['frame-at-open'] ?? '', /frame-hash check states its requirement as a hash/u)
+  assert.deepEqual(report.opaqueReproduced, [])
+
+  // The corrected arithmetic. Three milestones, three points, whoever scores
+  // them. A run that reached the first two scores 2 of 3.
+  assert.deepEqual(report.referenceScore, { verified: 3, total: 3 })
+  assert.equal(formatMilestoneScore(report.referenceScore), '3 of 3')
+  assert.deepEqual(scoreMilestones(lockOpaqueContract, ['moved', 'lock-opened']), { verified: 2, total: 3 })
+  assert.equal(formatMilestoneScore(scoreMilestones(lockOpaqueContract, ['moved', 'lock-opened'])), '2 of 3')
+
+  // The preserved half of the separation fix: an opaque milestone no baseline
+  // reached is not evidence that the contract separates, because no reader can
+  // see what it asked for. `separating` names the legible milestone only.
   assert.deepEqual(report.separating, ['lock-opened'])
   assert.equal(report.separates, true)
 
@@ -363,40 +376,55 @@ const lockIdentityContract = deriveContract(comboLock, 0, [...LOCK_REFERENCE], [
     () => assertContractSeparates(report),
     (error: unknown) => {
       const message = (error as Error).message
-      assert.match(message, /1 of 3 milestone\(s\) no policy can earn/u)
-      assert.match(message, /2 earnable, 33% unearnable/u)
+      assert.match(message, /states 1 of 3 milestone\(s\) as a hash/u)
+      assert.match(message, /2 legible, 33% opaque/u)
       assert.match(message, /frame-at-open/u)
-      assert.match(message, /identityChecks: \['frame-at-open'\]/u)
+      assert.match(message, /opaqueChecks: \['frame-at-open'\]/u)
       assert.doesNotMatch(message, /does not separate/u)
       return true
     },
   )
-  assert.throws(() => assertMilestonesEarnable(report), /no policy can earn/u)
+  assert.throws(() => assertOpaqueChecksDeclared(report), /as a hash/u)
 
-  // Declared, the same contract passes both gates.
-  assertContractSeparates(report, { identityChecks: ['frame-at-open'] })
-  assertMilestonesEarnable(report, { identityChecks: ['frame-at-open'] })
+  // Declared, the same contract passes both gates. Nothing needs declaring as
+  // weak, because the sweep found no other log that satisfies the hash.
+  assertContractSeparates(report, { opaqueChecks: ['frame-at-open'] })
+  assertOpaqueChecksDeclared(report, { opaqueChecks: ['frame-at-open'] })
 
   // A declaration is an exact set. A missing id and a stale id both fail, so a
   // hash milestone added by a later derivation cannot hide behind it.
-  assert.throws(() => assertContractSeparates(report, { identityChecks: [] }), /1 undeclared milestone\(s\)/u)
+  assert.throws(() => assertContractSeparates(report, { opaqueChecks: [] }), /1 undeclared opaque milestone\(s\)/u)
   assert.throws(
-    () => assertContractSeparates(report, { identityChecks: ['frame-at-open', 'lock-opened'] }),
-    /the contract does not pin: lock-opened/u,
+    () => assertContractSeparates(report, { opaqueChecks: ['frame-at-open', 'lock-opened'] }),
+    /the contract does not state as a hash: lock-opened/u,
   )
 
-  // Attestation reports the same split for one run.
-  const score = scoreMilestones(lockIdentityContract, report.reference.verified)
-  assert.deepEqual(score, report.referenceScore)
-  assert.deepEqual(earnedMilestones(lockIdentityContract, report.reference.verified), ['moved', 'lock-opened'])
+  // A hash over the whole input chain really is reached one way: 40 perturbed
+  // logs, none of them satisfying it.
+  assert.deepEqual(report.collisions, [{
+    milestone: 'frame-at-open',
+    firesAfter: 8,
+    probedTurns: 8,
+    substitutions: 40,
+    collisions: 0,
+    freeTurns: 0,
+    jointCollision: false,
+    family: 1,
+  }])
+  // Declaring a check weak when the sweep found no collision is stale too.
+  assert.throws(
+    () => assertOpaqueChecksDeclared(report, { opaqueChecks: ['frame-at-open'], weakChecks: ['frame-at-open'] }),
+    /weakChecks names 1 milestone\(s\) the sweep found no colliding log for/u,
+  )
+
+  // Attestation reports the same score for one run.
+  assert.deepEqual(scoreMilestones(lockOpaqueContract, report.reference.verified), report.referenceScore)
 }
 
-// (h) an all-identity contract reports 0 earnable, and calibration refuses it.
-//
-// This is the regression. Every baseline earns nothing, so before earnability
-// existed both milestones landed in `separating` and the report called the
-// contract a benchmark — one on which no policy but a replay of the reference
-// can ever score a point.
+// (h) an all-opaque contract. This is the regression #22 found and the reason
+// its fix survives: every baseline earns nothing, so before the split both
+// milestones landed in `separating` and the report called the contract a
+// benchmark. Nothing a reader can check separates it from a coin flip.
 const TRACE_VOCABULARY = ['a', 'b', 'c']
 const TRACE_REFERENCE = ['a', 'b', 'b', 'c', 'a']
 
@@ -441,44 +469,54 @@ const traceContract = deriveContract(traceGame, 0, [...TRACE_REFERENCE], [
     vocabulary: TRACE_VOCABULARY,
   })
   assert.deepEqual(report.reference.verified, ['frame-at-three', 'save-at-five'])
-  assert.deepEqual(report.earnable, [])
-  assert.deepEqual(report.unearnable, ['frame-at-three', 'save-at-five'])
-  assert.deepEqual(report.referenceScore, { verified: 2, earned: 0, earnable: 0, total: 2 })
-  assert.equal(formatMilestoneScore(report.referenceScore), '0 of 0 earnable (2 of 2 verified, 2 replay-identity)')
+  assert.deepEqual(report.legible, [])
+  assert.deepEqual(report.opaque, ['frame-at-three', 'save-at-five'])
+  // Both points are real points; the reference scored both, and so would any
+  // policy that reached the two states. The denominator is not the problem.
+  assert.deepEqual(report.referenceScore, { verified: 2, total: 2 })
+  assert.equal(formatMilestoneScore(report.referenceScore), '2 of 2')
 
-  // No baseline earned anything at all, and the contract still does not
-  // separate. That combination is the whole point: unreachable is not hard.
+  // No baseline earned anything, and the contract still does not separate.
+  // That combination is the whole point: a claim no reader can check is not
+  // evidence, however few policies satisfy it.
   assert.deepEqual(report.trivial, [])
   assert.ok(report.baselines.every((b) => b.verified.length === 0))
   assert.deepEqual(report.separating, [])
-  assert.equal(report.bestBaselineEarnedCount, 0)
+  assert.equal(report.bestBaselineLegibleCount, 0)
   assert.equal(report.separates, false)
   assert.throws(
     () => assertContractSeparates(report),
     (error: unknown) => {
       const message = (error as Error).message
-      assert.match(message, /2 of 2 milestone\(s\) no policy can earn/u)
-      assert.match(message, /0 earnable, 100% unearnable/u)
-      assert.match(message, /the reference itself scored 0 of 0 earnable \(2 of 2 verified, 2 replay-identity\)/u)
+      assert.match(message, /states 2 of 2 milestone\(s\) as a hash/u)
+      assert.match(message, /0 legible, 100% opaque/u)
+      assert.match(message, /on legible milestones alone: reference 0, best baseline 0, of 0 legible/u)
       assert.match(message, /does not separate/u)
       return true
     },
   )
   // Declaring both is honest about the checks and still not a benchmark.
   assert.throws(
-    () => assertContractSeparates(report, { identityChecks: ['frame-at-three', 'save-at-five'] }),
+    () => assertContractSeparates(report, { opaqueChecks: ['frame-at-three', 'save-at-five'] }),
     (error: unknown) => {
       const message = (error as Error).message
       assert.match(message, /does not separate/u)
-      assert.doesNotMatch(message, /no policy can earn/u)
+      assert.doesNotMatch(message, /as a hash/u)
       return true
     },
   )
-  assertMilestonesEarnable(report, { identityChecks: ['frame-at-three', 'save-at-five'] })
+  assertOpaqueChecksDeclared(report, { opaqueChecks: ['frame-at-three', 'save-at-five'] })
 
-  // A milestone gated behind an identity check is unearnable too, whatever its
-  // own check kind: the tracker admits it only after its prerequisite passed.
-  const gated = contractEarnability({
+  // A hash over the whole input chain admits one trajectory, measured.
+  assert.deepEqual(report.collisions.map((row) => [row.milestone, row.substitutions, row.collisions, row.family]), [
+    ['frame-at-three', 6, 0, 1],
+    ['save-at-five', 10, 0, 1],
+  ])
+
+  // Opacity propagates through `requires`: the tracker admits a milestone only
+  // after its prerequisites passed, so a legible check gated behind a hash
+  // still demands something a reader cannot see.
+  const gated = contractLegibility({
     ...traceContract,
     milestones: [
       ...traceContract.milestones,
@@ -491,50 +529,142 @@ const traceContract = deriveContract(traceGame, 0, [...TRACE_REFERENCE], [
       },
     ],
   })
-  assert.deepEqual(gated.earnable, [])
-  assert.equal(gated.reasons['steps-after-save'], 'requires save-at-five, which no independent policy can earn')
+  assert.deepEqual(gated.legible, [])
+  assert.equal(gated.reasons['steps-after-save'], 'requires save-at-five, whose requirement is opaque')
 }
 
 // (i) the same split on the two packaged toy adapters, measured rather than
-// assumed. Both are demonstration targets for the evidence tiers, and both
-// turn out to carry no earnable milestone at all.
+// assumed. Both are demonstration targets for the evidence tiers, and neither
+// states a single milestone a reader can check.
 {
-  const levels = contractEarnability(saveLevelsContract())
-  assert.deepEqual(levels.earnable, [])
-  assert.deepEqual(levels.unearnable, ['level-2-saved', 'level-2-logged'])
-  // The log-event check is semantic; it is unearnable only through its
+  const levels = contractLegibility(saveLevelsContract())
+  assert.deepEqual(levels.legible, [])
+  assert.deepEqual(levels.opaque, ['level-2-saved', 'level-2-logged'])
+  // The log-event check reads in the open; it is opaque only through its
   // prerequisite, which is the dependency rule doing real work.
-  assert.equal(levels.reasons['level-2-logged'], 'requires level-2-saved, which no independent policy can earn')
+  assert.equal(levels.reasons['level-2-logged'], 'requires level-2-saved, whose requirement is opaque')
   const report = calibrateContract(saveLevels, saveLevelsContract(), {
     reference: SAVE_LEVELS_REFERENCE,
     vocabulary: ['clear', 'grind'],
   })
   assert.equal(report.separates, false)
-  assert.deepEqual(report.referenceScore, { verified: 2, earned: 0, earnable: 0, total: 2 })
+  assert.deepEqual(report.referenceScore, { verified: 2, total: 2 })
 
   // screen-puzzle renders from one coordinate, so `constant:r` walks to the
-  // same square and reproduces both pinned frames. A hash another trajectory
-  // reproduces identifies no run, and the gate says so even when the author
+  // same square and reproduces both pinned frames. A hash one constant button
+  // press satisfies demands nothing, and the gate says so even when the author
   // declares it.
+  //
+  // The two probers are complementary, and this is the case that proves it:
+  // the substitution sweep finds nothing here, because every substitution
+  // shortens the walk, while a baseline that walks further reaches both.
   const puzzle = calibrateContract(screenPuzzle, screenPuzzleContract(), {
     reference: SCREEN_PUZZLE_REFERENCE,
     vocabulary: ['l', 'r'],
   })
-  assert.deepEqual(puzzle.earnable, [])
-  assert.deepEqual(puzzle.unearnableReproduced, ['midway-frame', 'east-gate-frame'])
+  assert.deepEqual(puzzle.legible, [])
+  assert.deepEqual(puzzle.opaqueReproduced, ['midway-frame', 'east-gate-frame'])
+  assert.deepEqual(puzzle.collisions.map((row) => row.collisions), [0, 0])
   assert.throws(
-    () => assertMilestonesEarnable(puzzle, { identityChecks: ['midway-frame', 'east-gate-frame'] }),
+    () => assertOpaqueChecksDeclared(puzzle, { opaqueChecks: ['midway-frame', 'east-gate-frame'] }),
     (error: unknown) => {
       const message = (error as Error).message
-      assert.match(message, /2 replay-identity milestone\(s\) were reproduced by a trivial baseline/u)
+      assert.match(message, /2 opaque milestone\(s\) were reproduced by a trivial baseline/u)
       assert.match(message, /midway-frame — reproduced by constant:r/u)
       return true
     },
   )
 }
 
+// --- the collision sweep, and what only it can find --------------------------
+//
+// #22 tested an opaque check against trivial baselines alone, and concluded
+// from a clean result that the check identified one run. It does not follow.
+// The ledge walk is the Breakout shape in miniature: pressing into a wall is a
+// state no-op, so two logs that differ at those turns reach the same state and
+// the same hash. No trivial baseline finds that; a one-input substitution of
+// the reference finds it immediately.
+
+const LEDGE_VOCABULARY = ['l', 'r']
+const LEDGE_REFERENCE = ['l', 'l', 'r', 'r', 'r', 'r', 'r', 'l', 'l']
+const LEDGE_END = 5
+
+interface LedgeState {
+  x: number
+  lit: boolean
+  steps: number
+}
+
+const ledgeWalk: Game<LedgeState> = {
+  id: 'ledge-walk',
+  init: () => ({ x: 0, lit: false, steps: 0 }),
+  step: (s, input) => {
+    // Walking into either wall is a no-op, which is the whole mechanism.
+    const x = input === 'r' ? Math.min(s.x + 1, LEDGE_END) : input === 'l' ? Math.max(s.x - 1, 0) : s.x
+    return { x, lit: s.lit || x === LEDGE_END, steps: s.steps + 1 }
+  },
+  frame: (s) => `x ${s.x}${s.lit ? ' · torch lit' : ''}`,
+  evidence: (s) => ({
+    engineState: { x: s.x, lit: s.lit ? 1 : 0, steps: s.steps },
+    frameHash: hashString(`ledge:${s.x}:${s.lit ? 1 : 0}`),
+  }),
+}
+
+const ledgeContract = deriveContract(ledgeWalk, 0, [...LEDGE_REFERENCE], [
+  {
+    afterInputs: 9,
+    id: 'frame-back-from-the-ledge',
+    tier: 'screen-frame',
+    glitchClass: 'legal',
+    sample: (e) => ({ kind: 'frame-hash', hash: e.frameHash ?? '' }),
+  },
+])
+
+{
+  const report = calibrateContract(ledgeWalk, ledgeContract, {
+    reference: LEDGE_REFERENCE,
+    vocabulary: LEDGE_VOCABULARY,
+  })
+  assert.deepEqual(report.opaque, ['frame-back-from-the-ledge'])
+  // The old prober says the hash is clean: no constant, no cycle and no walk
+  // over this vocabulary lands on the pinned frame.
+  assert.deepEqual(report.opaqueReproduced, [])
+
+  // The new one says otherwise, with the number. The two turns that press
+  // into the left wall at x = 0 are free: the state is the same either way.
+  assert.deepEqual(report.collisions, [{
+    milestone: 'frame-back-from-the-ledge',
+    firesAfter: 9,
+    probedTurns: 9,
+    substitutions: 9,
+    collisions: 2,
+    freeTurns: 2,
+    jointCollision: true,
+    family: 4,
+  }])
+
+  // Declaring the check opaque is no longer enough: the gate refuses until the
+  // author has read the measured weakness and accepted it by id.
+  assert.throws(
+    () => assertOpaqueChecksDeclared(report, { opaqueChecks: ['frame-back-from-the-ledge'] }),
+    (error: unknown) => {
+      const message = (error as Error).message
+      assert.match(message, /1 opaque milestone\(s\) are satisfied by input logs other than the reference/u)
+      assert.match(message, /2 of 9 single-input substitutions/u)
+      assert.match(message, /at 2 of 9 probed turn\(s\) before it fires \(after 9 input\(s\)\)/u)
+      assert.match(message, /also satisfies it, so at least 4 distinct 9-input log\(s\) satisfy it/u)
+      assert.match(message, /weakChecks: \['frame-back-from-the-ledge'\]/u)
+      return true
+    },
+  )
+  assertOpaqueChecksDeclared(report, {
+    opaqueChecks: ['frame-back-from-the-ledge'],
+    weakChecks: ['frame-back-from-the-ledge'],
+  })
+}
+
 // (j) the split is derived, so every existing contract keeps its bytes. These
-// hashes were recorded before earnability existed; a contract whose hash moves
+// hashes were recorded before legibility existed; a contract whose hash moves
 // invalidates every artifact that pinned it.
 {
   assert.equal(contractHash(engineCrawlerContract()), '29a9ff9f3bb296a898493589d6bcdb539b5be15f7f53931de7f3725916274426')
@@ -549,4 +679,4 @@ const traceContract = deriveContract(traceGame, 0, [...TRACE_REFERENCE], [
   }
 }
 
-console.log('playproof calibration: separating and non-separating contracts, earnable/identity split, policy determinism, edge cases OK')
+console.log('playproof calibration: separating and non-separating contracts, legible/opaque split, opaque-collision sweep, policy determinism, edge cases OK')

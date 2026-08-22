@@ -4,38 +4,66 @@ All notable changes to Playproof are documented here.
 
 ## 0.6.0
 
-### Earnable milestones are separated from replay-identity checks
+### A hash check identifies a state, not a trajectory
 
-- **The defect.** `deriveContract` samples frame hashes and save hashes from the reference trajectory and emits them as milestones. On ALE Breakout the derived contract has six milestones, and two of them — `frame-at-first-score` and `save-at-first-score` — pin the exact bytes the reference produced. No independent policy earns them. An authored policy that verified `score-opened`, `score-tier-2`, and `life-lost` read as 3 of 6; a hand-written ball tracker reached the same three. A third of that contract's points were reachable only by a replay of the reference, and every score quoted from it carried that denominator.
-- A milestone's role is now derived from its check kind. `save-hash` and `frame-hash` are replay-identity; `state-path`, `save-path`, `frame-path`, and `log-contains` are achievements. Nothing is stored on the milestone, so every existing contract keeps its bytes and its hash, and no author can forget to set it.
-- `contractEarnability(contract)` follows `requires` as well. An achievement gated behind a hash is unreachable too, because `MilestoneTracker` admits a milestone only after every prerequisite has passed. The packaged `save-levels` contract is the case in the repo: its `log-contains` milestone is semantic and still unearnable, through its save-hash prerequisite.
-- `Attestation` and `EpisodeRecord` keep `verified` unchanged and gain `earned` and `score`. `MilestoneScore` is `{ verified, earned, earnable, total }`, and `formatMilestoneScore` writes it as `3 of 4 earnable (3 of 6 verified, 2 replay-identity)`. A campaign segment report gains `scoreSoFar`, so an analyst reads progress against the earnable denominator mid-run.
+- **The correction.** An earlier draft of this release split contract milestones into "earnable" achievements and "replay-identity" hashes, on the premise that a hash pinned from the reference trajectory can only be satisfied by reproducing that trajectory. That premise is false, and it has been measured false. The measurement is below. An earlier draft of this entry published earnable denominators for eleven packaged contracts — Breakout 4 of 6, Libbet 4 of 6, PyBoy Tetris 3 of 5, Gymnasium FrozenLake 2 of 3 — and every one of those denominators was wrong. The denominator is the milestone count.
+- **What is true.** A `frame-hash` or `save-hash` check names one exact game state. Many trajectories reach one state, so an independent policy earns a hash milestone by playing, without ever seeing the reference. It is a legitimate achievement check whose requirement happens to be written where nobody can read it.
+- The axis is legibility, not earnability. `checkLegibility` and `contractLegibility(contract)` split a contract into **legible** milestones (`state-path`, `save-path`, `frame-path`, `log-contains` — a reader sees what they demand) and **opaque** ones (`save-hash`, `frame-hash`). It follows `requires`, because a legible check gated behind a hash still demands something a reader cannot see. Legibility is derived from the check kind, so every existing contract keeps its bytes and its hash.
+- `MilestoneScore` is `{ verified, total }`, and `formatMilestoneScore` writes it as `3 of 6`. Every milestone is a point, hashes included. `Attestation` and `EpisodeRecord` carry `verified` and `score`; the `earned` field and `earnedMilestones` are gone, because a run earns everything it verifies. A campaign segment report carries `scoreSoFar`.
 - The campaign ledger is unchanged. Its `verified` list and the contract it pins by hash reproduce the score through `scoreMilestones`, so a ledger written by 0.5.0 still loads.
+- Replay attestation is untouched. The input-log hash chain is the mechanism that proves a replay reproduced a recorded run, and it is correct. A milestone hash never proved that.
 
-### Calibration refuses a contract with points no policy can score
+### Calibration refuses a contract whose points nobody can read
 
-- **A second defect, in the gate itself.** A replay-identity milestone is never earned by a trivial baseline, so it landed in `separating` and the separation test read it as the contract's strongest evidence. Measured on 0.5.0: a contract whose two milestones are hashes over the whole input chain reports `separates: true` with every baseline earning nothing. Unreachable read as hard.
-- `CalibrationReport.separating` now holds earnable milestones only, and `separates` compares earnable counts through the new `bestBaselineEarnedCount`. A baseline that beats the reference on real progress can no longer be outvoted by hashes the reference reproduces by construction.
-- The report gains `earnable`, `unearnable`, `unearnableReasons`, `unearnableReproduced`, and `referenceScore`.
-- `assertContractSeparates(report, { identityChecks })` takes an exact declaration of the identity checks the author accepts. An undeclared one, a stale id, and an identity hash that a trivial baseline reproduced all fail the gate, so a hash milestone added by a later derivation cannot enter a published contract unnoticed. `assertMilestonesEarnable` runs the same check alone, for a target that is not meant to separate.
-- Identity checks are not removed and not discouraged. Replay attestation is exactly the claim that one run reproduced another's bytes. The fix is to stop counting them as achievements.
+- **A real defect, independent of the model above, and it stands.** An opaque milestone is never earned by a trivial baseline, so it landed in `separating` and the separation test read it as the contract's strongest evidence. Measured on 0.5.0: a contract whose two milestones are hashes over the whole input chain reports `separates: true` with every baseline earning nothing.
+- `CalibrationReport.separating` now holds legible milestones only, and `separates` compares legible counts through `bestBaselineLegibleCount`. "The reference reached it and no baseline did" is not evidence when no reader can tell what it was reached for.
+- The report gains `legible`, `opaque`, `opacityReasons`, `opaqueReproduced`, `collisions`, and `referenceScore`.
+- `assertContractSeparates(report, { opaqueChecks, weakChecks })` takes an exact declaration. An undeclared opaque check, a stale id, and a hash that a trivial baseline reproduced all fail the gate. `assertOpaqueChecksDeclared` runs the same check alone, for a target that is not meant to separate.
+
+### The collision sweep, which the earlier draft could not do
+
+- The earlier draft tested an opaque check against trivial baselines only, found none of them reproduced a hash, and concluded the hash identified one run. That is why the false premise survived: the baseline suite cannot serve a ball, let alone score.
+- `probeOpaqueCollisions` is the prober that can. It replaces one input of the reference at a time, over the prefix that ends where the check first passes, and counts the perturbed logs that still satisfy it. It is deterministic, needs no independent policy, and runs inside `calibrateContract` for every opaque milestone.
+- Each row carries `firesAfter`, `probedTurns`, `substitutions`, `collisions`, `freeTurns`, `jointCollision`, and `family` — a lower bound on the number of distinct logs that satisfy the check, as the product over probed turns of (1 + surviving alternatives). `collisionTurns` caps the probe for a check that fires very late.
+- The gate refuses an opaque check the sweep reproduced, unless the author accepts the measured weakness by id in `weakChecks`. A stale `weakChecks` id fails too.
 
 ### Measured
 
-| Contract | Milestones | Earnable | Reference | Best trivial baseline |
-|---|---|---|---|---|
-| ALE Breakout, 210 turns, seed 0 | 6 | 4 | 4 of 4 earnable (6 of 6 verified) | 0 earnable |
-| Libbet through `pyboy-generic`, 70 turns, seed 0 | 6 | 4 | 3 of 4 earnable (3 of 6 verified) | 3 earnable |
-| `save-levels` toy | 2 | 0 | 0 of 0 earnable (2 of 2 verified) | 0 earnable |
-| `screen-puzzle` toy | 2 | 0 | 0 of 0 earnable (2 of 2 verified) | 2 verified |
+ALE Breakout, ale-py 0.12.1, seed 0, both hashes firing after 32 inputs over `NOOP/FIRE/RIGHT/LEFT`:
 
-- Breakout separates on its earnable milestones and its scores were quoted out of the wrong denominator. Libbet still does not separate, and its four earnable milestones are exactly the ones a constant `a` press already earns.
-- `screen-puzzle` renders from one coordinate, so `constant:r` walks to the same square and reproduces both pinned frames. A hash another trajectory reproduces identifies no run, and the gate now says so.
+| Measurement | Value |
+|---|---|
+| single-input substitutions of the 32-turn prefix | 96 |
+| substitutions that still reproduce both hashes | 40, at 16 of the 32 turns |
+| all 16 free turns substituted at once | still reproduces both |
+| distinct 32-input logs that satisfy both hashes | at least 382,205,952 |
+| trivial baselines that reproduce either hash | 0 of 8 |
+
+`FIRE` while the ball is already in flight is a state no-op, so a large family of logs reaches a bit-identical emulator state. An independently written ball tracker reproduced both hashes without seeing the reference; its log diverges at turn 17, where it plays `FIRE` and the reference plays `NOOP`.
+
+Corrected per-contract figures. The **Milestones** column is the denominator of a score:
+
+| Contract | Milestones | Legible | Opaque | Reference | Best trivial baseline |
+|---|---|---|---|---|---|
+| ALE Breakout, 210 turns, seed 0 | 6 | 4 | 2 | 6 of 6 | 0 legible |
+| Libbet through `pyboy-generic`, 70 turns, seed 0 | 6 | 4 | 2 | 3 of 6 | 3 legible |
+| PyBoy Tetris | 5 | 3 | 2 | — | — |
+| stable-retro Airstriker | 5 | 4 | 1 | — | — |
+| Gymnasium CartPole | 5 | 4 | 1 | — | — |
+| Gymnasium FrozenLake | 3 | 2 | 1 | — | — |
+| RetroArch, `n` channels with screen milestones | n + 2 | n + 1 | 1 | — | — |
+| `native-2048` | 7 | 7 | 0 | — | — |
+| `engine-crawler` toy | 4 | 4 | 0 | — | — |
+| `save-levels` toy | 2 | 0 | 2 | 2 of 2 | 2 |
+| `screen-puzzle` toy | 2 | 0 | 2 | 2 of 2 | 2 |
+
+- Breakout separates on its legible milestones. Libbet still does not separate, and its four legible milestones are exactly the ones a constant `a` press already earns.
+- Both toys are reproduced in full by a trivial baseline. On `save-levels` the round-robin cycle over `clear`/`grind` replays the reference exactly, and on `screen-puzzle` `constant:r` walks to the same square. A hash a trivial baseline satisfies demands nothing, and the gate says so. Neither toy's substitution sweep finds a collision, because every substitution of those short references breaks the check — the two probers are complementary, and neither replaces the other.
 
 ### Replay attestation is unaffected
 
 - `verified` keeps its meaning and its contents. The three packaged toy contract hashes are byte-identical across the change, and `calibration.test.mts` pins them, together with the serialized milestone key set, so a contract that gains a field fails the build.
-- `ale.test.mts` and `pyboy-libbet.test.mts` verify the same milestone ids on the same runs as before, and now also report the split.
+- `ale.test.mts` and `pyboy-libbet.test.mts` verify the same milestone ids on the same runs as before, and now also report the split and the sweep.
 
 ## 0.5.0
 
