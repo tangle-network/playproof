@@ -129,14 +129,24 @@ Because no trivial baseline earns it either, the separation test used to read it
 `assertContractSeparates` and `assertMilestonesEarnable` refuse a contract whose unearnable milestones the author has not declared by id.
 The declaration is an exact set, so a hash milestone that a later derivation adds cannot enter a published contract unnoticed.
 
-Measured on the packaged references:
+Every packaged contract, by check kind and `requires` graph:
 
 | Contract | Milestones | Earnable | Replay-identity |
 |---|---|---|---|
 | ALE Breakout | 6 | 4 | 2 — `frame-at-first-score`, `save-at-first-score` |
 | Libbet through `pyboy-generic` | 6 | 4 | 2 — `state-at-first-progression`, `frame-at-first-progression` |
+| PyBoy Tetris | 5 | 3 | 2 — `game-started`, `state-at-line-1` |
+| stable-retro Airstriker | 5 | 4 | 1 — `frame-at-first-score` |
+| Gymnasium CartPole | 5 | 4 | 1 — `frame-at-25-steps` |
+| Gymnasium FrozenLake | 3 | 2 | 1 — `goal-frame` |
+| RetroArch, `n` channels with screen milestones | n + 2 | n + 1 | 1 — `frame-at-first-progression` |
+| `native-2048` | 7 | 7 | 0 |
+| `engine-crawler` toy | 4 | 4 | 0 |
 | `save-levels` toy | 2 | 0 | 2 — the save hash, and the event gated behind it |
 | `screen-puzzle` toy | 2 | 0 | 2 — both frame hashes |
+
+The Breakout and Libbet rows are asserted against the running emulator in `ale.test.mts` and `pyboy-libbet.test.mts`.
+The rest follow from the check kinds their references declare, which is the whole of the rule.
 
 Keep the identity checks. They are the whole of what replay attestation proves.
 Declare them, and report the score as earned over earnable:
