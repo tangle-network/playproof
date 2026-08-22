@@ -7,18 +7,19 @@
  * into a loud failure (that is how CI proves the job really executed).
  *
  * Battery: contract derivation across three evidence tiers, known-good
- * attestation, garbage rejection, graded partial credit, cross-process
- * determinism including the save-state hash, checkpoint round-trip,
- * unknown-input no-op, the observation image channel, and worker teardown.
- * Zero model spend.
+ * attestation, garbage rejection, graded partial credit, calibration with the
+ * earnable split, cross-process determinism including the save-state hash,
+ * checkpoint round-trip, unknown-input no-op, the observation image channel,
+ * and worker teardown. Zero model spend.
  */
 import { strict as assert } from 'node:assert'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { attestRun } from './attestation'
+import { assertContractSeparates, assertMilestonesEarnable, calibrateContract } from './calibration'
 import { logFrom, observationOf } from './runtime'
 import { decodePng, unscale } from './test-png.mts'
-import { validateContract } from './schema'
+import { contractEarnability, formatMilestoneScore, scoreMilestones, validateContract } from './schema'
 import { AleRpc } from './adapters/ale-rpc'
 import { bundledReference, makeAle, type Ale, type AleState } from './adapters/ale'
 
@@ -108,6 +109,66 @@ if (!pythonHasAle()) {
     assert.equal(partial.verdict, 'rejected')
     assert.deepEqual(partial.verified, ['score-opened', 'frame-at-first-score', 'save-at-first-score', 'score-tier-2'])
     assert.deepEqual(partial.reasons, ['claimed-not-reproduced:score-tier-4,life-lost'])
+
+    // The reference verified all six milestones, and only four of them are
+    // progress. `frame-at-first-score` and `save-at-first-score` hash the exact
+    // screen and save state this trajectory produced, so reaching them means
+    // reproducing this run rather than playing Breakout.
+    assert.deepEqual(contractEarnability(adapter.contract), {
+      earnable: ['score-opened', 'score-tier-2', 'score-tier-4', 'life-lost'],
+      unearnable: ['frame-at-first-score', 'save-at-first-score'],
+      reasons: {
+        'frame-at-first-score': "its frame-hash check pins the reference run's exact bytes",
+        'save-at-first-score': "its save-hash check pins the reference run's exact bytes",
+      },
+    })
+    assert.deepEqual(good.earned, ['score-opened', 'score-tier-2', 'score-tier-4', 'life-lost'])
+    assert.deepEqual(good.score, { verified: 6, earned: 4, earnable: 4, total: 6 })
+    assert.equal(formatMilestoneScore(partial.score), '2 of 4 earnable (4 of 6 verified, 2 replay-identity)')
+
+    // The measured defect this split exists for. An authored policy and a
+    // hand-written ball tracker each verified score-opened, score-tier-2 and
+    // life-lost on this contract, and neither reproduced either hash. Both
+    // read as three of six. Three of four is the honest statement, and it is
+    // the whole of what an independent policy can score.
+    const played = ['score-opened', 'score-tier-2', 'life-lost']
+    assert.deepEqual(scoreMilestones(adapter.contract, played), { verified: 3, earned: 3, earnable: 4, total: 6 })
+    assert.equal(formatMilestoneScore(scoreMilestones(adapter.contract, played)),
+      '3 of 4 earnable (3 of 6 verified, 2 replay-identity)')
+
+    // Calibration on the real emulator. Every baseline plays the reference's
+    // 210 turns, so the comparison is length-matched.
+    const calibration = calibrateContract(adapter.game, adapter.contract, {
+      reference: adapter.reference,
+      vocabulary: adapter.inputs,
+      seed: adapter.seed,
+    })
+    for (const outcome of [calibration.reference, ...calibration.baselines]) {
+      console.log(`  ${outcome.id.padEnd(32)} ${String(outcome.verified.length).padStart(2)}  ${outcome.verdict}  ${outcome.verified.join(',') || '-'}`)
+    }
+    assert.deepEqual(calibration.earnable, ['score-opened', 'score-tier-2', 'score-tier-4', 'life-lost'])
+    assert.deepEqual(calibration.unearnable, ['frame-at-first-score', 'save-at-first-score'])
+    assert.deepEqual(calibration.referenceScore, { verified: 6, earned: 4, earnable: 4, total: 6 })
+    // No trivial policy reproduced either hash, so both really are identity
+    // checks on this substrate and not low-entropy channels.
+    assert.deepEqual(calibration.unearnableReproduced, [])
+    // Undeclared, the contract cannot ship, whatever the separation verdict.
+    assert.throws(() => assertMilestonesEarnable(calibration), /2 of 6 milestone\(s\) no policy can earn/u)
+    const declared = { identityChecks: ['frame-at-first-score', 'save-at-first-score'] }
+    assertMilestonesEarnable(calibration, declared)
+    // Whether Breakout separates is a fact about the ROM, not about this
+    // change: assert only that the earnable comparison is the one being made.
+    assert.equal(
+      calibration.separates,
+      calibration.separating.length > 0 && calibration.referenceScore.earned > calibration.bestBaselineEarnedCount,
+    )
+    if (calibration.separates) assertContractSeparates(calibration, declared)
+    else assert.throws(() => assertContractSeparates(calibration, declared), /does not separate/u)
+    console.log(
+      `ale: calibration — reference ${formatMilestoneScore(calibration.referenceScore)}, ` +
+      `best trivial baseline ${calibration.bestBaselineEarnedCount} earnable over ${calibration.turns} turns, ` +
+      `separating=${calibration.separating.join(',') || 'nothing'}, separates=${calibration.separates}`,
+    )
 
     // Determinism: two replays in this worker and one in a freshly spawned
     // worker must agree on every frame hash, every save-state hash, and every
