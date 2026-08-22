@@ -171,7 +171,7 @@ if (!pythonHasAle()) {
       // The PNG really decodes, at the size the adapter declared, to a picture
       // with more than one colour in it. A constant frame would mean the
       // encoder ran on an empty buffer and the agent is shown nothing.
-      const decoded = decodePng(Buffer.from(image.base64, 'base64'))
+      const decoded = decodePng(Buffer.from(image.base64, 'base64'), { expectFilterNone: true })
       const [nativeHeight, nativeWidth] = adapter.identity.screen
       assert.deepEqual([decoded.width, decoded.height], [nativeWidth * 3, nativeHeight * 3])
       assert.deepEqual([image.width, image.height], [decoded.width, decoded.height])

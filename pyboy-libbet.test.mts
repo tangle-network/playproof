@@ -187,7 +187,7 @@ try {
     assert.equal(observation.images?.length, 1)
     const image = observation.images![0]!
     assert.equal(image.mediaType, 'image/png')
-    const decoded = decodePng(Buffer.from(image.base64, 'base64'))
+    const decoded = decodePng(Buffer.from(image.base64, 'base64'), { expectFilterNone: true })
     assert.deepEqual([decoded.width, decoded.height], [160 * 3, 144 * 3])
     assert.deepEqual([image.width, image.height], [decoded.width, decoded.height])
 

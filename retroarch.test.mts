@@ -246,6 +246,9 @@ if (gap) {
     assert.equal(observation.images?.length, 1)
     const screen = observation.images![0]!
     assert.equal(screen.mediaType, 'image/png')
+    // No filter expectation here: this is RetroArch's own file, and it picks
+    // a filter per scanline, which is exactly why the evidence hash covers the
+    // decoded pixels and never the bytes.
     const decoded = decodePng(Buffer.from(screen.base64, 'base64'))
     assert.deepEqual([screen.width, screen.height], [decoded.width, decoded.height])
     // `frameHash` covers the DECODED pixels and never the file, because
