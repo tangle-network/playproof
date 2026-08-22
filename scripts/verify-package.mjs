@@ -48,6 +48,7 @@ try {
     'package/dist/gym/reference-cartpole.json',
     'package/dist/native/worker.py',
     'package/dist/pyboy/worker.py',
+    'package/dist/pyshared/playproof_png.py',
     'package/dist/retro/worker.py',
     'package/dist/retro/reference-airstriker.json',
     'package/dist/ale/worker.py',

@@ -11,7 +11,7 @@ determinism knobs are explicit and set here:
 
 Protocol methods:
   boot       {game, seed?, frameSkip?, repeatActionProbability?, mode?,
-              difficulty?, channels?}
+              difficulty?, channels?, screenImage?, screenScale?}
   reset      {seed?}
   step       {input, frames?}   one action name, repeated for `frames` frames
   evidence   {}
@@ -32,6 +32,13 @@ the ALE state blob IS reproducible across processes, so this worker publishes
 Evidence stays bounded. The 128-byte RAM is never published whole: only the
 byte indices the caller names as channels reach `engineState`.
 
+`screenImage` publishes the rendered screen as a PNG next to `frameText`, so a
+vision agent reads the pixels this worker already hashes for evidence instead
+of a luminance-to-ASCII downsample of them. It is off by default, so the bytes
+on the protocol line are unchanged for a caller that does not ask. `screenScale`
+repeats whole pixels; an Atari frame is 160x210, which is below the tile grid a
+model provider resizes into.
+
 stdout carries only protocol lines. The emulator prints its banner at the Info
 log level, so the logger is lowered to Error before the interface is built.
 """
@@ -43,6 +50,9 @@ import re
 import struct
 import sys
 import zlib
+
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'pyshared'))
+from playproof_png import encode_png
 
 # Checkpoint container. `ALEState` restores the emulator and its frame
 # counters, but ALE keeps no cumulative episode reward, so the score travels
@@ -63,6 +73,9 @@ GLYPH_RAMP = tuple(
 )
 RAM_SIZE = 128
 MAX_CHANNELS = 32
+# Whole-pixel repeat only, and never past the edge a model provider resizes to.
+MAX_SCREEN_SCALE = 8
+MAX_SCREEN_DIMENSION = 2048
 CHANNEL_ID = re.compile(r'^[A-Za-z][A-Za-z0-9_]{0,31}$')
 NOOP = 'NOOP'
 
@@ -110,16 +123,20 @@ class Worker:
         self.mode = None
         self.difficulty = None
         self.channels = []
+        self.screen_image = False
+        self.screen_scale = 1
         self.gen = 0
         self.score = 0.0
         self.done = False
         self._cache = None
+        self._image = None
         self._edges = None
 
     # ---- lifecycle -------------------------------------------------------
 
     def boot(self, game, seed=0, frame_skip=4, repeat_action_probability=0.0,
-             mode=None, difficulty=None, channels=None):
+             mode=None, difficulty=None, channels=None, screen_image=False,
+             screen_scale=1):
         from ale_py import ALEInterface, LoggerMode, roms
         ALEInterface.setLoggerMode(LoggerMode.Error)
         known = set(roms.get_all_rom_ids())
@@ -134,6 +151,10 @@ class Worker:
         self.mode = None if mode is None else int(mode)
         self.difficulty = None if difficulty is None else int(difficulty)
         self.channels = _parse_channels(channels)
+        self.screen_image = bool(screen_image)
+        self.screen_scale = int(screen_scale)
+        if not 1 <= self.screen_scale <= MAX_SCREEN_SCALE:
+            raise ValueError(f'screenScale must be 1..{MAX_SCREEN_SCALE}, got {screen_scale!r}')
         self._start()
         return self.identity()
 
@@ -157,6 +178,7 @@ class Worker:
         self.done = False
         self.gen += 1
         self._cache = None
+        self._image = None
 
     def reset(self, seed=None):
         if seed is not None:
@@ -188,7 +210,10 @@ class Worker:
             'modes': modes,
             'difficulties': difficulties,
             'screen': [int(height), int(width)],
+            'screenImage': self.screen_image,
+            'screenScale': self.screen_scale,
             'frameText': self.frame_text(),
+            **({} if not self.screen_image else {'frameImage': self.screen_rgb()}),
         }
 
     # ---- inputs ----------------------------------------------------------
@@ -259,6 +284,38 @@ class Worker:
         self._cache = (key, ev)
         return ev
 
+    def screen_rgb(self):
+        """The rendered screen as a PNG, or None when the boot did not ask.
+
+        This reads the SAME buffer `_evidence` hashes into `frameHash`, so the
+        picture the agent sees is the screen the verifier checks. The cost is
+        one screen read and one encode per emulator instant, both cached until
+        the state moves.
+        """
+        if not self.screen_image:
+            return None
+        key = (self.gen, self.frame(), self.score, self.done)
+        if self._image is not None and self._image[0] == key:
+            return self._image[1]
+        import numpy as np
+        rgb = self.ale.getScreenRGB()
+        if self.screen_scale > 1:
+            rgb = np.repeat(np.repeat(rgb, self.screen_scale, axis=0), self.screen_scale, axis=1)
+        height, width = int(rgb.shape[0]), int(rgb.shape[1])
+        if max(height, width) > MAX_SCREEN_DIMENSION:
+            raise ValueError(
+                f'screen is {width}x{height} at scale {self.screen_scale}, over the '
+                f'{MAX_SCREEN_DIMENSION}px observation bound')
+        png = encode_png(width, height, 3, np.ascontiguousarray(rgb).tobytes())
+        image = {
+            'mediaType': 'image/png',
+            'base64': base64.b64encode(png).decode('ascii'),
+            'width': width,
+            'height': height,
+        }
+        self._image = (key, image)
+        return image
+
     def frame_text(self):
         cells = self._cells(self._luminance())
         lines = [''.join(GLYPHS[GLYPH_RAMP[min(255, int(value))]] for value in row) for row in cells]
@@ -278,7 +335,11 @@ class Worker:
             if self.ale.game_over():
                 self.done = True
         self._cache = None
-        return {'frame': self.frame(), 'evidence': self._evidence(), 'frameText': self.frame_text()}
+        self._image = None
+        result = {'frame': self.frame(), 'evidence': self._evidence(), 'frameText': self.frame_text()}
+        if self.screen_image:
+            result['frameImage'] = self.screen_rgb()
+        return result
 
     def snapshot(self):
         header = SNAPSHOT_HEADER.pack(SNAPSHOT_MAGIC, SNAPSHOT_VERSION, self.score)
@@ -310,6 +371,7 @@ class Worker:
         self.score = float(score)
         self.done = bool(self.ale.game_over())
         self._cache = None
+        self._image = None
         return {'gen': self.gen, 'frame': self.frame()}
 
     def close(self):
@@ -342,6 +404,8 @@ def dispatch(worker, method, params):
             mode=params.get('mode'),
             difficulty=params.get('difficulty'),
             channels=params.get('channels'),
+            screen_image=params.get('screenImage', False),
+            screen_scale=params.get('screenScale', 1),
         )
     if method == 'reset':
         return worker.reset(params.get('seed'))
@@ -350,7 +414,8 @@ def dispatch(worker, method, params):
     if method == 'evidence':
         return worker._evidence()
     if method == 'frame':
-        return {'text': worker.frame_text()}
+        image = worker.screen_rgb()
+        return {'text': worker.frame_text(), **({} if image is None else {'image': image})}
     if method == 'inputs':
         return {'inputs': worker.vocabulary()}
     if method in ('snapshot', 'checkpoint'):

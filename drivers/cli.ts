@@ -4,13 +4,22 @@ import type {
   AgentDriver,
   AgentHistoryEntry,
 } from '../episode'
+import type { ObservationImage } from '../runtime'
 
 export interface CliAgentRequest {
   schemaVersion: 1
   frame: string
   history: readonly AgentHistoryEntry[]
+  /**
+   * Rendered screens for this turn, base64 in `images[].base64`.
+   *
+   * Present only when the driver was created with `vision: true` and the game
+   * published pixels. `frame` stays the whole text observation either way, so
+   * a CLI that ignores this key behaves exactly as before.
+   */
+  images?: readonly ObservationImage[]
   /** JSON-safe decision context; cancellation remains process-local. */
-  context: Readonly<Omit<AgentDecisionContext, 'signal'>>
+  context: Readonly<Omit<AgentDecisionContext, 'signal' | 'observation'>>
 }
 
 export interface CliAgentRun {
@@ -37,6 +46,15 @@ export interface CliAgentDriverOptions {
   costUsd?: (run: CliAgentRun) => number
   timeoutMs?: number
   maxOutputBytes?: number
+  /**
+   * Put the observation's images in the JSON request.
+   *
+   * Off by default: the pixels multiply the bytes written to the child process
+   * on every turn, and a CLI written against the current request must keep
+   * receiving the current request. Requires `stdin: 'json'`, because the
+   * rendered prompt is a text protocol that cannot carry an image.
+   */
+  vision?: boolean
 }
 
 /**
@@ -65,13 +83,19 @@ export function createCliAgentDriver(options: CliAgentDriverOptions): AgentDrive
     && options.fixedCostUsd === undefined) {
     throw new Error('CLI first-word output requires costUsd or fixedCostUsd')
   }
+  // Fail at construction rather than drop the pixels silently every turn.
+  if (options.vision === true && (options.stdin ?? 'json') !== 'json') {
+    throw new Error('CLI vision requires stdin json; the rendered prompt cannot carry an image')
+  }
 
   return {
     act: async (frame, history, context) => {
+      const images = options.vision === true ? (context.observation?.images ?? []) : []
       const request: CliAgentRequest = {
         schemaVersion: 1,
         frame,
         history: history.map((entry) => ({ ...entry })),
+        ...(images.length === 0 ? {} : { images: images.map((image) => ({ ...image })) }),
         context: {
           turn: context.turn,
           maxTurns: context.maxTurns,

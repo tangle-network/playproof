@@ -72,6 +72,7 @@ interface AgentDriver {
       spentUsd: number
       remainingBudgetUsd: number
       guidance?: string
+      observation?: { text: string; images?: readonly ObservationImage[] }
       signal?: AbortSignal
     },
   ): Promise<{ input: string; costUsd: number }>
@@ -80,6 +81,8 @@ interface AgentDriver {
 
 `guidance` carries the latest supervisor or analyst note of a long-horizon run.
 It is out-of-band context, never evidence, and never part of the input log.
+
+`observation` is the same turn's full observation. `observation.text` is exactly the `frame` argument, so a text-only driver can ignore the field.
 
 Playproof includes two optional conveniences:
 
@@ -117,6 +120,88 @@ const driver = createCliAgentDriver({
 ```
 
 The CLI driver spawns without a shell and bounds time and output. It can invoke Claude Code, Codex CLI, OpenCode, Pi, a local executable, or a container entrypoint. See [Agent drivers](docs/agent-drivers.md) and `examples/` for complete integrations, including a caller-supplied Tangle Agent Runtime backend.
+
+## The observation channel: text always, pixels optional
+
+A game declares what the agent perceives. Text is always there. Images are opt-in.
+
+```ts
+interface Observation {
+  text: string
+  images?: readonly ObservationImage[]
+}
+
+interface ObservationImage {
+  mediaType: 'image/png' | 'image/jpeg'
+  base64: string
+  width: number
+  height: number
+  label?: string
+}
+```
+
+A game publishes pixels by implementing `observe(state)`.
+A game that does not implement it has the observation `{ text: frame(state) }`, which is what every game had before, so nothing about a text game changes.
+The harness builds every observation through one function, `observationOf(game, state)`, and hands it to the driver as `context.observation`.
+
+### Why this exists
+
+The emulator adapters were already capturing the screen.
+`ale/worker.py` calls `getScreenRGB()`, hashes those pixels into `frameHash` for verification, and used to throw the picture away; the agent received a luminance-to-ASCII downsample of it.
+That is a perception limit the harness created, not a result about the agent.
+
+Measured on ALE Breakout: `stealth/ox-alpha`, a `text+image->text` model, and `liquid/lfm-2.5-2.6b:free` both scored 0 of 6 milestones, and their own transcripts show them reading the ASCII as a maze — "exploring the map", "positioned near the goal area" — rather than a paddle-and-ball game.
+One of them pressed `FIRE` twice in 45 turns, so no ball was ever in play.
+
+### Bounds
+
+An image is an unbounded byte channel into a context somebody pays for, so the harness fixes a ceiling:
+
+| Bound | Value | Why |
+|---|---|---|
+| `MAX_OBSERVATION_IMAGE_BYTES` | 1 MiB decoded | About 440x the largest real frame measured (a 3x Breakout upscale encodes to 2,383 bytes), so it never fires on legitimate pixels and still stops a runaway adapter. |
+| `MAX_OBSERVATION_IMAGE_DIMENSION` | 2048 px | Model providers resize an image into their own tile grid at or below that edge, so pixels past it are re-encoded away before the model reads them while the harness still pays for the bytes. |
+| `MAX_OBSERVATION_IMAGES` | 4 per turn | A screen plus an inset or a comparison frame, not a filmstrip. |
+| `MAX_OBSERVATION_TOTAL_IMAGE_BYTES` | 2 MiB per turn | The per-turn total is what the context actually pays for. |
+
+Breaching a bound is a harness error that fails the turn.
+Nothing is silently shrunk: a run whose observation quietly changed size is a run whose reported result cannot be reproduced.
+
+History stays text only.
+A driver replays its retained trajectory into every prompt, so keeping images in history would multiply the image tokens by the history depth on every decision.
+
+### The evidence boundary does not move
+
+`Observation` is the agent's channel and `Evidence` is the harness's.
+The screen image is legitimate precisely because it is what a human player sees; a caption that carried privileged state would not be.
+`scripts/check-boundary.mjs` fails the build if `observationOf` reads `evidence`, or if any driver names it at all, and `observation.test.mts` runs a game whose privileged counter must never appear in the text, the caption, or the history.
+
+### Replay is unaffected
+
+Images never enter the input log, the contract, or the attestation.
+A replay recomputes progress from the seed and the inputs alone, so the same run verifies identically whether or not it produced pixels.
+`observation.test.mts` asserts it: same contract hash, same chain head, same verified set, same attestation.
+
+### Sending the pixels
+
+Both built-in drivers default to off, so no existing caller starts paying for image tokens without asking:
+
+```ts
+const driver = createOpenAICompatibleDriver({ model: 'your-model', vision: true })
+```
+
+With `vision: true` and an observation that has images, the user message becomes OpenAI content parts (`text` plus `image_url` data URLs).
+With vision off, or on a turn with no images, the request is the same single string it always was.
+The CLI driver takes `vision: true` as well and adds an `images` key to its JSON request; its first-word protocol is unchanged.
+
+**A vision run costs image tokens.** A rendered frame is typically several hundred to a thousand-plus input tokens per turn, on top of the text, on every decision. Playproof records the reported cost either way and does not discount it.
+
+### Which adapters produce pixels
+
+`adapters/ale`, `adapters/pyboy-generic`, and `adapters/stable-retro` take `screenImage: true` and encode the screen their worker already captured; `screenScale` repeats whole pixels for the low-resolution consoles.
+`adapters/retroarch` takes `screenImage: true` and republishes RetroArch's own screenshot.
+The Gymnasium adapter publishes no image: its environments are vector or `ansi` observations, and a pixel render would need an imaging dependency Playproof does not take.
+See [Execution adapters](docs/adapters.md).
 
 ## Long-horizon runs: segments, steering, resume, analysts
 
@@ -271,6 +356,10 @@ import { makePyBoyGeneric } from '@tangle-network/playproof/adapters/pyboy-gener
 
 The PyBoy adapter supports deterministic replay, memory snapshots, save states, framebuffer evidence, checkpoint exploration, and blind progression-channel discovery. ROMs are never distributed by Playproof.
 
+`makePyBoyGeneric(rom, doc, { screenImage: true, screenScale: 3 })` also shows the agent the rendered screen. PyBoy's own `screen.image` needs Pillow, which Playproof does not depend on, so the worker encodes the PNG from the raw array itself.
+
+Showing it required a fix first: the wiring ticked the emulator with rendering off, so the framebuffer hash was one constant value for a whole run and the screen-frame milestone was pinned on it. The last frame of each input window now renders, which leaves every privileged variable identical and changes `saveBlobHash`. See [Execution adapters](docs/adapters.md).
+
 The real-emulator regression runs in CI on [Libbet and the Magic Floor](https://github.com/pinobatch/libbet), a free-software Game Boy game whose release ROM the job downloads and verifies by SHA-256 and MD5. `pnpm test:pyboy-libbet` boots the generic adapter from `pyboy/discovery-libbet.json`, replays the reference run, and checks that the derived milestones verify, that two power-on replays produce identical evidence, and that a garbage input script does not. A commercial ROM such as Tetris stays on the release manager's machine, so `pnpm test:pyboy` remains a local gate.
 
 ### Libretro consoles through stable-retro
@@ -303,7 +392,7 @@ const { game, contract, reference, inputs, dispose } = makeAle({ game: 'breakout
 The [Arcade Learning Environment](https://github.com/Farama-Foundation/Arcade-Learning-Environment) is the Atari 2600 substrate the reinforcement-learning literature reports on, so a Playproof score on one of these ROMs is directly comparable with published baselines. The adapter drives `ALEInterface` rather than a Gymnasium wrapper, which keeps the determinism knobs explicit: Playproof sets the seed, sets the sticky-action probability to 0, and applies the frame repeat itself.
 
 - **Inputs.** The game's minimal action set, as ALE `Action` names: `NOOP`, `FIRE`, `UP`, `RIGHT`, `LEFT`, `DOWN`, `UPRIGHT`, and the rest. Unknown words are no-ops. Each input is held for `frames` emulator frames, four by default.
-- **Observation.** An ASCII downsample of the screen plus a one-line score, lives, and frame summary.
+- **Observation.** An ASCII downsample of the screen plus a one-line score, lives, and frame summary. `screenImage: true` adds the rendered screen as a PNG, with `screenScale` repeating whole pixels; at 3x a Breakout frame encodes to about 2.4 KB.
 - **Evidence.** Cumulative score, lives, the emulator frame counters, and the RAM bytes the caller names as `channels`. The 128-byte RAM page is never published whole. Joined by the rendered-frame hash and the serialized emulator-state hash.
 - **Verification.** `replay`. Screens, RAM, counters, and the serialized `ALEState` were measured byte-identical across separate worker processes at all 211 snapshots of the Breakout reference, so a save-file milestone is honest here even though the same tier is not honest on stable-retro. See [Execution adapters](docs/adapters.md) for the numbers.
 
@@ -417,6 +506,8 @@ A capable attacker may rebuild every public hash after editing a run, but cannot
 Playproof does not implement DLL injection, runtime patching, anti-cheat bypasses, credential extraction, arbitrary memory writes, network manipulation, or shell-string evaluation.
 
 Unknown and control-character desktop inputs are no-ops. Worker frames, helper output, HTTP bodies, save files, and event files are bounded while being read. Credentials remain in caller-owned driver or adapter configuration and are not included in signed benchmark artifacts.
+
+Observation images are bounded the same way: a declared media type checked against the file's own magic bytes, canonical base64, a per-image byte and dimension cap, and a per-turn total. A breach fails the turn instead of quietly showing the agent something smaller.
 
 Please report vulnerabilities through the process in [SECURITY.md](SECURITY.md).
 

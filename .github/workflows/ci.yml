@@ -49,7 +49,7 @@ jobs:
             pnpm install --no-frozen-lockfile
           fi
       - name: Compile Python workers
-        run: $PLAYPROOF_PYTHON -m compileall -q ale desktop gym native pyboy retro retroarch
+        run: $PLAYPROOF_PYTHON -m compileall -q ale desktop gym native pyboy pyshared retro retroarch
       - name: Full release-equivalent gate
         run: pnpm run ci
 

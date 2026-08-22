@@ -8,13 +8,16 @@
  *
  * Battery: contract derivation, known-good attestation, garbage rejection,
  * cross-process determinism, checkpoint round-trip, unknown-input no-op,
- * and worker teardown. About 20s, zero model spend.
+ * the observation image channel, and worker teardown. About 20s, zero model
+ * spend.
  */
 import { strict as assert } from 'node:assert'
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { attestRun } from './attestation'
-import { logFrom } from './runtime'
+import { logFrom, observationOf } from './runtime'
+import { decodePng, unscale } from './test-png.mts'
 import { validateContract } from './schema'
 import { RetroRpc } from './adapters/retro-rpc'
 import { bundledReference, makeStableRetro, type RetroState, type StableRetro } from './adapters/stable-retro'
@@ -139,6 +142,45 @@ if (!pythonHasRetro()) {
       assert.throws(() => rpc.restore(Buffer.from('not a checkpoint')), /worker restore failed/)
     } finally {
       rpc.shutdown()
+    }
+
+    // Observation images: the worker encodes the SAME observation buffer it
+    // hashes for evidence. The default adapter above published none, which is
+    // the point of the option: the byte cost is unchanged until a caller asks.
+    assert.equal(adapter.identity.screenImage, false)
+    assert.equal('images' in observationOf(adapter.game, adapter.game.init(adapter.seed)), false)
+
+    const vision = makeStableRetro({ game: GAME, screenImage: true, screenScale: 2 })
+    try {
+      assert.equal(vision.identity.screenImage, true)
+      let seen = vision.game.init(vision.seed)
+      for (const input of vision.reference.slice(0, 44)) seen = vision.game.step(seen, input)
+      const observation = observationOf(vision.game, seen)
+      assert.equal(observation.text, vision.game.frame(seen))
+      assert.equal(observation.images?.length, 1)
+      const image = observation.images![0]!
+      assert.equal(image.mediaType, 'image/png')
+      const decoded = decodePng(Buffer.from(image.base64, 'base64'), { expectFilterNone: true })
+      assert.deepEqual([image.width, image.height], [decoded.width, decoded.height])
+      assert.ok(decoded.colours > 1, 'the encoded screen is one flat colour')
+
+      // The picture the agent is shown is the screen the verifier hashes:
+      // undoing the whole-pixel upscale recovers the native buffer, and its
+      // SHA-256 is `frameHash`.
+      const native = createHash('sha256').update(unscale(decoded, 2)).digest('hex')
+      assert.equal(native, vision.game.evidence(seen).frameHash)
+
+      // The image path does not perturb the emulator.
+      let plain = adapter.game.init(adapter.seed)
+      for (const input of adapter.reference.slice(0, 44)) plain = adapter.game.step(plain, input)
+      assert.deepEqual(vision.game.evidence(seen), adapter.game.evidence(plain))
+      console.log(
+        `stable-retro: observation image — ${decoded.width}x${decoded.height} PNG, ` +
+        `${Buffer.from(image.base64, 'base64').length} bytes encoded, ${decoded.colours} distinct colours, ` +
+        'pixels hash to frameHash, evidence unchanged',
+      )
+    } finally {
+      vision.dispose()
     }
 
     // Teardown: dispose kills the worker and every later call fails loudly

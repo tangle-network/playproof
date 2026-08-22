@@ -37,7 +37,7 @@
  *   PLAYPROOF_PYTHON  python interpreter that runs the worker (default python3)
  */
 import { deriveContract, type MarkPoint } from '../authoring'
-import type { Evidence, Game } from '../runtime'
+import type { Evidence, Game, ObservationImage } from '../runtime'
 import type { MilestoneContract } from '../schema'
 import type { DiscoveryDoc } from './pyboy-generic'
 import {
@@ -57,6 +57,8 @@ export interface RetroArchState {
   frame: number
   evidence: Evidence
   frameText: string
+  /** Rendered screen, present only when the adapter booted with `screenImage`. */
+  frameImage?: ObservationImage
 }
 
 export interface RetroArchOptions {
@@ -100,6 +102,13 @@ export interface RetroArchOptions {
    * measurement on gambatte.
    */
   screenMilestones?: boolean
+  /**
+   * Republish RetroArch's own screenshot to the agent as a PNG. Off by
+   * default, and unrelated to `screenMilestones`: this is the observation
+   * channel, which never enters the input log, the contract, or the
+   * attestation, while `screenMilestones` pins verified progress.
+   */
+  screenImage?: boolean
 }
 
 export interface RetroArch {
@@ -266,6 +275,7 @@ export function makeRetroArch(options: RetroArchOptions): RetroArch {
       ...(options.clearRegions !== undefined ? { clearRegions: options.clearRegions } : {}),
       ...(options.systemDir !== undefined ? { systemDir: options.systemDir } : {}),
       ...(options.videoDriver !== undefined ? { videoDriver: options.videoDriver } : {}),
+      ...(options.screenImage === undefined ? {} : { screenImage: options.screenImage }),
       seed,
     })
   } catch (error) {
@@ -281,13 +291,26 @@ export function makeRetroArch(options: RetroArchOptions): RetroArch {
       frame: identity.frame,
       evidence: bootEvidence,
       frameText: identity.frameText,
+      ...(identity.frameImage === undefined ? {} : { frameImage: identity.frameImage }),
     }
 
     const game: Game<RetroArchState> = {
       id: `retroarch-${identity.core.replace(/_libretro\.(?:dylib|so|dll)$/u, '')}-${identity.contentSha.slice(0, 8)}`,
       init: (initSeed) => {
         const r = rpc.reset(initSeed)
-        current = { gen: r.gen, frame: r.frame, evidence: toEvidence(rpc.evidence()), frameText: rpc.frameText() }
+        // Evidence first, then the observation. This worker's evidence cache
+        // answers a repeat call at one instant with the whole entry rather
+        // than the evidence, so the order of these two calls is load-bearing
+        // until that defect is fixed on its own; the worker says the same.
+        const evidence = toEvidence(rpc.evidence())
+        const observation = rpc.frameObservation()
+        current = {
+          gen: r.gen,
+          frame: r.frame,
+          evidence,
+          frameText: observation.text,
+          ...(observation.image === undefined ? {} : { frameImage: observation.image }),
+        }
         return current
       },
       step: (s, input) => {
@@ -297,10 +320,21 @@ export function makeRetroArch(options: RetroArchOptions): RetroArch {
           throw new Error(`stale state: gen ${s.gen} but worker is at gen ${current.gen} — step ordering violated`)
         }
         const r = rpc.step(input)
-        current = { gen: current.gen, frame: r.frame, evidence: toEvidence(r.evidence), frameText: r.frameText }
+        current = {
+          gen: current.gen,
+          frame: r.frame,
+          evidence: toEvidence(r.evidence),
+          frameText: r.frameText,
+          ...(r.frameImage === undefined ? {} : { frameImage: r.frameImage }),
+        }
         return current
       },
       frame: (s) => s.frameText,
+      // The agent channel: the text observation always, and the rendered screen
+      // when the boot asked for it. Never `s.evidence`, which is harness-only.
+      observe: (s) => (s.frameImage === undefined
+        ? { text: s.frameText }
+        : { text: s.frameText, images: [s.frameImage] }),
       evidence: (s) => s.evidence,
     }
 

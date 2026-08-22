@@ -8,7 +8,8 @@ the privileged variables, and the screen resolution all come from the
 integration data of the selected game.
 
 Protocol methods:
-  boot       {game, state?, scenario?, players?, frameskip?, seed?}
+  boot       {game, state?, scenario?, players?, frameskip?, seed?,
+              screenImage?, screenScale?}
   reset      {seed?}
   step       {input}          one input word, repeated for `frameskip` frames
   evidence   {}
@@ -27,6 +28,12 @@ processes (165 of 1036288 bytes move, in padding around offset 140k), so this
 worker deliberately publishes no `saveBlobHash`. Save states remain exact
 within one process, which is what snapshot/restore needs.
 
+`screenImage` publishes the rendered screen as a PNG next to `frameText`, so a
+vision agent reads the pixels this worker already hashes into `frameHash`
+instead of a luminance-to-ASCII downsample of them. It is off by default, so
+the bytes on the protocol line are unchanged for a caller that does not ask.
+`screenScale` repeats whole pixels for the low-resolution consoles.
+
 stdout carries only protocol lines. Diagnostics belong on stderr.
 """
 import base64
@@ -39,6 +46,9 @@ import warnings
 import zlib
 
 warnings.filterwarnings('ignore')
+
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'pyshared'))
+from playproof_png import encode_png
 
 # Checkpoint container. The libretro core blob alone cannot rewind the worker
 # frame counter, so the counter travels with it and restore is exact.
@@ -56,6 +66,9 @@ GLYPH_RAMP = tuple(
     min(len(GLYPHS) - 1, int(((value / 255.0) ** 0.5) * (len(GLYPHS) - 1) + 0.5))
     for value in range(256)
 )
+# Whole-pixel repeat only, and never past the edge a model provider resizes to.
+MAX_SCREEN_SCALE = 8
+MAX_SCREEN_DIMENSION = 2048
 MAX_SUMMARY_VARIABLES = 8
 MAX_VOCABULARY_ACTIONS = 3
 DIRECTIONS = ('UP', 'DOWN', 'LEFT', 'RIGHT')
@@ -93,18 +106,26 @@ class Worker:
         self.seed = 0
         self.buttons = []
         self.rom_sha = None
+        self.screen_image = False
+        self.screen_scale = 1
         self.gen = 0
         self.frame = 0
         self.done = False
         self.obs = None
         self._cache = None
+        self._image = None
         self._edges = None
 
     # ---- lifecycle -------------------------------------------------------
 
-    def boot(self, game, state=None, scenario=None, players=1, frameskip=4, seed=0):
+    def boot(self, game, state=None, scenario=None, players=1, frameskip=4, seed=0,
+             screen_image=False, screen_scale=1):
         import retro
         import retro.data
+        self.screen_image = bool(screen_image)
+        self.screen_scale = int(screen_scale)
+        if not 1 <= self.screen_scale <= MAX_SCREEN_SCALE:
+            raise ValueError('screenScale must be 1..%d, got %r' % (MAX_SCREEN_SCALE, screen_scale))
         self.retro = retro
         self.game = _resolve_game(retro, game)
         self.state = state
@@ -137,6 +158,7 @@ class Worker:
         self.done = False
         self.gen += 1
         self._cache = None
+        self._image = None
 
     def reset(self, seed=None):
         if seed is not None:
@@ -155,7 +177,10 @@ class Worker:
             'variables': sorted(self._variables().keys()),
             'romSha': self.rom_sha,
             'frameskip': self.frameskip,
+            'screenImage': self.screen_image,
+            'screenScale': self.screen_scale,
             'frameText': self.frame_text(),
+            **({} if not self.screen_image else {'frameImage': self.screen_rgb()}),
         }
 
     # ---- inputs ----------------------------------------------------------
@@ -250,6 +275,43 @@ class Worker:
         self._cache = (key, ev)
         return ev
 
+    def screen_rgb(self):
+        """The rendered screen as a PNG, or None when the boot did not ask.
+
+        This is the SAME observation buffer `_evidence` hashes into
+        `frameHash`, so the picture the agent sees is the screen the verifier
+        checks, including immediately after a checkpoint restore. The cost is
+        one encode per emulator instant, cached until the state moves.
+        """
+        if not self.screen_image or self.obs is None:
+            return None
+        key = (self.gen, self.frame)
+        if self._image is not None and self._image[0] == key:
+            return self._image[1]
+        import numpy as np
+        pixels = self.obs
+        if pixels.ndim == 3:
+            pixels = pixels[:, :, :3]
+            channels = 3
+        else:
+            channels = 1
+        if self.screen_scale > 1:
+            pixels = np.repeat(np.repeat(pixels, self.screen_scale, axis=0), self.screen_scale, axis=1)
+        height, width = int(pixels.shape[0]), int(pixels.shape[1])
+        if max(height, width) > MAX_SCREEN_DIMENSION:
+            raise ValueError(
+                'screen is %dx%d at scale %d, over the %dpx observation bound'
+                % (width, height, self.screen_scale, MAX_SCREEN_DIMENSION))
+        png = encode_png(width, height, channels, np.ascontiguousarray(pixels).tobytes())
+        image = {
+            'mediaType': 'image/png',
+            'base64': base64.b64encode(png).decode('ascii'),
+            'width': width,
+            'height': height,
+        }
+        self._image = (key, image)
+        return image
+
     def frame_text(self):
         lum = self._luminance()
         lines = []
@@ -276,8 +338,12 @@ class Worker:
             if terminated or truncated:
                 self.done = True
         self._cache = None
+        self._image = None
         ev = self._evidence()
-        return {'frame': self.frame, 'evidence': ev, 'frameText': self.frame_text()}
+        result = {'frame': self.frame, 'evidence': ev, 'frameText': self.frame_text()}
+        if self.screen_image:
+            result['frameImage'] = self.screen_rgb()
+        return result
 
     def snapshot(self):
         header = SNAPSHOT_HEADER.pack(SNAPSHOT_MAGIC, SNAPSHOT_VERSION, self.frame)
@@ -305,6 +371,7 @@ class Worker:
         self.frame = frame
         self.done = False
         self._cache = None
+        self._image = None
         return {'gen': self.gen, 'frame': self.frame}
 
     def close(self):
@@ -338,6 +405,8 @@ def dispatch(worker, method, params):
             players=params.get('players', 1),
             frameskip=params.get('frameskip', 4),
             seed=params.get('seed', 0),
+            screen_image=params.get('screenImage', False),
+            screen_scale=params.get('screenScale', 1),
         )
     if method == 'reset':
         return worker.reset(params.get('seed'))
@@ -346,7 +415,8 @@ def dispatch(worker, method, params):
     if method == 'evidence':
         return worker._evidence()
     if method == 'frame':
-        return {'text': worker.frame_text()}
+        image = worker.screen_rgb()
+        return {'text': worker.frame_text(), **({} if image is None else {'image': image})}
     if method == 'inputs':
         return {'inputs': worker.vocabulary(), 'buttons': list(worker.buttons)}
     if method in ('snapshot', 'checkpoint'):

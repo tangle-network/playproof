@@ -28,7 +28,7 @@ import type {
   EpisodeRecord,
   MilestoneCostRow,
 } from './episode'
-import type { Game, InputLog } from './runtime'
+import { observationTextOf, type Game, type InputLog } from './runtime'
 import { contractHash, type MilestoneContract } from './schema'
 
 /**
@@ -263,7 +263,9 @@ export async function runCampaign<S>(
           remainingBudgetUsd: Math.max(0, budgetUsd - rollout.spent),
           newMilestones: rollout.milestones.slice(milestonesBefore),
           verifiedSoFar: rollout.tracker.verified(),
-          lastFrame: game.frame(rollout.state),
+          // The segment report is a text ledger read by an analyst and written
+          // to disk, so it carries the observation text and never its pixels.
+          lastFrame: observationTextOf(game, rollout.state),
           recentHistory: rollout.history.slice(-REPORT_HISTORY_LIMIT).map((entry) => ({ ...entry })),
           latencyMs: rollout.latencyMs.slice(latencyBefore),
           // Re-validating every segment keeps ledger integrity a live

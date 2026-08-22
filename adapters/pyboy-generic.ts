@@ -20,7 +20,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { deriveContract, type MarkPoint } from '../authoring'
-import type { Evidence, Game } from '../runtime'
+import type { Evidence, Game, ObservationImage } from '../runtime'
 import type { MilestoneContract } from '../schema'
 import { PyBoyRpc, type WorkerEvidence } from './pyboy-rpc'
 
@@ -67,6 +67,22 @@ export interface PyBoyGenericState {
   frame: number
   evidence: Evidence
   frameText: string
+  /** Rendered screen, present only when the adapter booted with `screenImage`. */
+  frameImage?: ObservationImage
+}
+
+export interface PyBoyGenericOptions {
+  confirmedChannelId?: string
+  /**
+   * Publish the rendered screen to the agent as a PNG. Off by default.
+   *
+   * The pixels are observation only. They never enter the input log, the
+   * contract, or the attestation, so a run verifies identically with or
+   * without them.
+   */
+  screenImage?: boolean
+  /** Whole-pixel upscale of the published screen, 1..8. Native is 160x144. */
+  screenScale?: number
 }
 
 function toEvidence(w: WorkerEvidence): Evidence {
@@ -134,25 +150,43 @@ export function autoMarks(doc: DiscoveryDoc, confirmedChannelId?: string): MarkP
   return marks
 }
 
-export function makePyBoyGeneric(rom: string, doc: DiscoveryDoc, opts: { confirmedChannelId?: string } = {}): PyBoyGeneric {
+export function makePyBoyGeneric(rom: string, doc: DiscoveryDoc, opts: PyBoyGenericOptions = {}): PyBoyGeneric {
+  // A scale with no image channel is a silent no-op: the worker range-checks
+  // it and then renders nothing. Say so instead of ignoring the caller.
+  if (opts.screenScale !== undefined && opts.screenImage !== true) {
+    throw new Error('screenScale needs screenImage: true; the screen is only published when the image channel is on')
+  }
   const rpc = new PyBoyRpc()
   const bootOpts = doc.exploration.preamble === 'tetris-hand' ? { preamble: 'tetris-hand' } : {}
-  const booted = rpc.boot(rom, 'generic', { channels: doc.channels, ...bootOpts })
+  const booted = rpc.boot(rom, 'generic', {
+    channels: doc.channels,
+    ...bootOpts,
+    ...(opts.screenImage === undefined ? {} : { screenImage: opts.screenImage }),
+    ...(opts.screenScale === undefined ? {} : { screenScale: opts.screenScale }),
+  })
   const gen0 = booted.gen
   const bootEv = rpc.evidence()
-  const bootText = rpc.frameText()
+  const bootObservation = rpc.frameObservation()
   let current: PyBoyGenericState = {
     gen: gen0,
     frame: booted.frame,
     evidence: toEvidence(bootEv),
-    frameText: bootText,
+    frameText: bootObservation.text,
+    ...(bootObservation.image === undefined ? {} : { frameImage: bootObservation.image }),
   }
   const game: Game<PyBoyGenericState> = {
     id: `pyboy-generic-${doc.romMd5.slice(0, 8)}`,
     init: () => {
       const r = rpc.reset()
       const ev = rpc.evidence()
-      current = { gen: r.gen, frame: r.frame, evidence: toEvidence(ev), frameText: rpc.frameText() }
+      const observation = rpc.frameObservation()
+      current = {
+        gen: r.gen,
+        frame: r.frame,
+        evidence: toEvidence(ev),
+        frameText: observation.text,
+        ...(observation.image === undefined ? {} : { frameImage: observation.image }),
+      }
       return current
     },
     step: (s, input) => {
@@ -160,10 +194,21 @@ export function makePyBoyGeneric(rom: string, doc: DiscoveryDoc, opts: { confirm
         throw new Error(`stale state: gen ${s.gen} but worker is at gen ${current.gen}`)
       }
       const r = rpc.step(input)
-      current = { gen: current.gen, frame: r.frame, evidence: toEvidence(r.evidence), frameText: r.frameText }
+      current = {
+        gen: current.gen,
+        frame: r.frame,
+        evidence: toEvidence(r.evidence),
+        frameText: r.frameText,
+        ...(r.frameImage === undefined ? {} : { frameImage: r.frameImage }),
+      }
       return current
     },
     frame: (s) => s.frameText,
+    // The agent channel: the text observation always, and the rendered screen
+    // when the boot asked for it. Never `s.evidence`, which is harness-only.
+    observe: (s) => (s.frameImage === undefined
+      ? { text: s.frameText }
+      : { text: s.frameText, images: [s.frameImage] }),
     evidence: (s) => s.evidence,
   }
   const seed = 0

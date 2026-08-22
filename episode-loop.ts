@@ -10,7 +10,7 @@
  * This module is internal. It is not exported from `index.ts`.
  */
 import { attestRun, inputStatistics, MilestoneTracker } from './attestation'
-import { InputLog, type Game } from './runtime'
+import { InputLog, observationOf, observationTextOf, type Game } from './runtime'
 import type { MilestoneContract } from './schema'
 import type {
   AgentDecisionContext,
@@ -93,7 +93,10 @@ export function applyInput<S>(
     rollout.observed.push(id)
     rollout.milestones.push({ id, turn: rollout.turns + 1, costUsd: round4(rollout.spent) })
   }
-  rollout.history.push({ input, frame: game.frame(rollout.state) })
+  // History keeps the observation text only; see AgentHistoryEntry. It reads
+  // the text alone so that appending a row, on a live turn or on a ledger
+  // replay, cannot fail on a bound that governs pixels nobody records.
+  rollout.history.push({ input, frame: observationTextOf(game, rollout.state) })
   if (rollout.historyLimit !== undefined && rollout.history.length > rollout.historyLimit) {
     rollout.history.splice(0, rollout.history.length - rollout.historyLimit)
   }
@@ -126,7 +129,10 @@ export async function advanceRollout<S>(
   while (rollout.turns < limits.maxTurns && rollout.spent < limits.budgetUsd) {
     if (limits.maxDecisions !== undefined && taken >= limits.maxDecisions) return 'segmentLimit'
     limits.signal?.throwIfAborted()
-    const frame = game.frame(rollout.state)
+    // One observation per decision. An over-cap image throws here, which fails
+    // the turn instead of quietly showing the agent a smaller screen.
+    const observation = observationOf(game, rollout.state)
+    const frame = observation.text
     const context: AgentDecisionContext = {
       turn: rollout.turns + 1,
       maxTurns: limits.maxTurns,
@@ -134,6 +140,7 @@ export async function advanceRollout<S>(
       spentUsd: rollout.spent,
       remainingBudgetUsd: Math.max(0, limits.budgetUsd - rollout.spent),
       ...(limits.guidance === undefined ? {} : { guidance: limits.guidance }),
+      observation,
       ...(limits.signal === undefined ? {} : { signal: limits.signal }),
     }
     // A driver receives an immutable snapshot, never the harness's mutable log.

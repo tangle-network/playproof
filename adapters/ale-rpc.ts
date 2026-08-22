@@ -1,8 +1,18 @@
 /** Thin Arcade Learning Environment specialization of the shared out-of-process WorkerRpc protocol. */
 import { fileURLToPath } from 'node:url'
+import type { ObservationImage } from '../runtime'
 import { WorkerRpc, type WorkerEvidence, type WorkerStepResult } from './worker-rpc'
 
 const WORKER_PATH = fileURLToPath(new URL('../ale/worker.py', import.meta.url))
+
+/**
+ * One protocol line may now carry a rendered screen. An observation image is
+ * capped at 1 MiB decoded, which is about 1.4 MB of base64 before the JSON
+ * around it, so the transport bound is raised above what a legal image can
+ * produce. Otherwise the transport would reject the line first and report a
+ * byte count instead of the cap the caller actually breached.
+ */
+const MAX_RESPONSE_BYTES = 8 << 20
 
 export type { WorkerEvidence }
 export type StepResult = WorkerStepResult
@@ -28,6 +38,10 @@ export interface AleBootOptions {
   difficulty?: number
   /** RAM bytes to publish as evidence. Everything else stays unpublished. */
   channels?: AleRamChannel[]
+  /** Publish the rendered screen as a PNG for the agent. Off by default. */
+  screenImage?: boolean
+  /** Whole-pixel upscale of that PNG, 1..8. An Atari frame is 160x210. */
+  screenScale?: number
 }
 
 export interface AleIdentity {
@@ -49,12 +63,17 @@ export interface AleIdentity {
   difficulties: number[]
   /** Screen height and width in pixels. */
   screen: [number, number]
+  /** Whether this boot publishes the rendered screen for the agent. */
+  screenImage: boolean
+  screenScale: number
   frameText: string
+  /** The boot screen, present only when `screenImage` is on. */
+  frameImage?: ObservationImage
 }
 
 export class AleRpc extends WorkerRpc {
   constructor(python = process.env.PLAYPROOF_PYTHON ?? 'python3') {
-    super({ name: 'ale', command: python, args: [WORKER_PATH] })
+    super({ name: 'ale', command: python, args: [WORKER_PATH], maxResponseBytes: MAX_RESPONSE_BYTES })
   }
 
   boot(options: AleBootOptions): AleIdentity {

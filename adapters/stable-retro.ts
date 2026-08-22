@@ -36,7 +36,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { deriveContract, type MarkPoint } from '../authoring'
-import type { Evidence, Game } from '../runtime'
+import type { Evidence, Game, ObservationImage } from '../runtime'
 import type { EvidenceTier, MilestoneContract, NumericOperator } from '../schema'
 import { RetroRpc, type RetroIdentity, type WorkerEvidence } from './retro-rpc'
 
@@ -79,6 +79,8 @@ export interface RetroState {
   frame: number
   evidence: Evidence
   frameText: string
+  /** Rendered screen, present only when the adapter booted with `screenImage`. */
+  frameImage?: ObservationImage
 }
 
 export interface StableRetroOptions {
@@ -91,6 +93,16 @@ export interface StableRetroOptions {
   frames?: number
   seed?: number
   python?: string
+  /**
+   * Publish the rendered screen to the agent as a PNG. Off by default.
+   *
+   * The pixels are observation only. They never enter the input log, the
+   * contract, or the attestation, so a run verifies identically with or
+   * without them.
+   */
+  screenImage?: boolean
+  /** Whole-pixel upscale of the published screen, 1..8. */
+  screenScale?: number
   /** Overrides the bundled reference; required for a game with none. */
   reference?: RetroReference
 }
@@ -198,6 +210,12 @@ export function makeStableRetro(options: StableRetroOptions): StableRetro {
   if (reference.schemaVersion !== 1) throw new Error(`unsupported reference schemaVersion ${reference.schemaVersion}`)
   if (reference.inputs.length === 0) throw new Error(`reference for ${options.game} has no inputs`)
 
+  // A scale with no image channel is a silent no-op: the worker range-checks
+  // it and then renders nothing. Say so instead of ignoring the caller.
+  if (options.screenScale !== undefined && options.screenImage !== true) {
+    throw new Error('screenScale needs screenImage: true; the screen is only published when the image channel is on')
+  }
+
   const seed = options.seed ?? reference.seed
   const frameskip = options.frames ?? reference.frames
   const rpc = new RetroRpc(options.python)
@@ -208,6 +226,8 @@ export function makeStableRetro(options: StableRetroOptions): StableRetro {
       ...(options.state ?? reference.state ? { state: options.state ?? reference.state! } : {}),
       ...(options.scenario !== undefined ? { scenario: options.scenario } : {}),
       ...(options.players !== undefined ? { players: options.players } : {}),
+      ...(options.screenImage === undefined ? {} : { screenImage: options.screenImage }),
+      ...(options.screenScale === undefined ? {} : { screenScale: options.screenScale }),
       frameskip,
       seed,
     })
@@ -227,13 +247,21 @@ export function makeStableRetro(options: StableRetroOptions): StableRetro {
     frame: identity.frame,
     evidence: toEvidence(rpc.evidence()),
     frameText: identity.frameText,
+    ...(identity.frameImage === undefined ? {} : { frameImage: identity.frameImage }),
   }
 
   const game: Game<RetroState> = {
     id: `stable-retro-${normalizeGame(identity.game)}`,
     init: (initSeed) => {
       const r = rpc.reset(initSeed)
-      current = { gen: r.gen, frame: r.frame, evidence: toEvidence(rpc.evidence()), frameText: rpc.frameText() }
+      const observation = rpc.frameObservation()
+      current = {
+        gen: r.gen,
+        frame: r.frame,
+        evidence: toEvidence(rpc.evidence()),
+        frameText: observation.text,
+        ...(observation.image === undefined ? {} : { frameImage: observation.image }),
+      }
       return current
     },
     step: (s, input) => {
@@ -243,10 +271,21 @@ export function makeStableRetro(options: StableRetroOptions): StableRetro {
         throw new Error(`stale state: gen ${s.gen} but worker is at gen ${current.gen} — step ordering violated`)
       }
       const r = rpc.step(input)
-      current = { gen: current.gen, frame: r.frame, evidence: toEvidence(r.evidence), frameText: r.frameText }
+      current = {
+        gen: current.gen,
+        frame: r.frame,
+        evidence: toEvidence(r.evidence),
+        frameText: r.frameText,
+        ...(r.frameImage === undefined ? {} : { frameImage: r.frameImage }),
+      }
       return current
     },
     frame: (s) => s.frameText,
+    // The agent channel: the text observation always, and the rendered screen
+    // when the boot asked for it. Never `s.evidence`, which is harness-only.
+    observe: (s) => (s.frameImage === undefined
+      ? { text: s.frameText }
+      : { text: s.frameText, images: [s.frameImage] }),
     evidence: (s) => s.evidence,
   }
 

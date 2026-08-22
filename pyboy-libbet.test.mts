@@ -21,8 +21,9 @@ import { fileURLToPath } from 'node:url'
 import { autoMarks, loadDiscovery, makePyBoyGeneric } from './adapters/pyboy-generic'
 import { attestRun } from './attestation'
 import { assertContractSeparates, calibrateContract, UNKNOWN_BASELINE_WORD } from './calibration'
-import { logFrom } from './runtime'
+import { logFrom, observationOf } from './runtime'
 import { validateContract } from './schema'
+import { decodePng, unscale } from './test-png.mts'
 
 /** The Game Boy pad, matching `BUTTONS` in pyboy/tetris.py. */
 const GAME_BOY_BUTTONS = ['up', 'down', 'left', 'right', 'a', 'b', 'start', 'select']
@@ -172,11 +173,53 @@ try {
   assert.deepEqual(report.baselines.find((b) => b.id === `constant:${UNKNOWN_BASELINE_WORD}`)?.verified, [])
 
   console.log(`pyboy-libbet: calibration regression — reference ${report.reference.verified.length} milestones, best trivial baseline ${report.bestBaselineCount} over ${report.turns} turns, separates=${report.separates} OK`)
+
+  // (f) The observation image channel on the real emulator. PyBoy's own
+  // screen.image needs Pillow, which is absent here — the boot logs say so —
+  // so the worker encodes the PNG from the raw array itself.
+  assert.equal('images' in observationOf(adapter.game, adapter.game.init(adapter.seed)), false)
+  const vision = makePyBoyGeneric(rom, doc, { screenImage: true, screenScale: 3 })
+  try {
+    let seen = vision.game.init(vision.seed)
+    for (const input of vision.reference.slice(0, 60)) seen = vision.game.step(seen, input)
+    const observation = observationOf(vision.game, seen)
+    assert.equal(observation.text, vision.game.frame(seen))
+    assert.equal(observation.images?.length, 1)
+    const image = observation.images![0]!
+    assert.equal(image.mediaType, 'image/png')
+    const decoded = decodePng(Buffer.from(image.base64, 'base64'), { expectFilterNone: true })
+    assert.deepEqual([decoded.width, decoded.height], [160 * 3, 144 * 3])
+    assert.deepEqual([image.width, image.height], [decoded.width, decoded.height])
+
+    // The strongest statement about this channel, and the one that does not
+    // depend on what this ROM happens to draw: the picture the agent is shown
+    // is the screen the verifier hashes. Undoing the whole-pixel upscale
+    // recovers the native buffer, and its SHA-256 is `frameHash`.
+    //
+    // Libbet under the blind generic preamble draws an all-white screen from
+    // about the fortieth reference input onward, so a "more than one colour"
+    // assertion would pin a property of this ROM rather than of the channel.
+    const native = createHash('sha256').update(unscale(decoded, 3)).digest('hex')
+    assert.equal(native, vision.game.evidence(seen).frameHash)
+
+    // The image path does not perturb the emulator: at the same instant of the
+    // same script, the evidence a verifier recomputes is identical.
+    let plain = adapter.game.init(adapter.seed)
+    for (const input of adapter.reference.slice(0, 60)) plain = adapter.game.step(plain, input)
+    assert.deepEqual(vision.game.evidence(seen), adapter.game.evidence(plain))
+    console.log(
+      `pyboy-libbet: observation image — ${decoded.width}x${decoded.height} PNG, ` +
+      `${Buffer.from(image.base64, 'base64').length} bytes encoded, ${decoded.colours} distinct colours, ` +
+      'pixels hash to frameHash, evidence unchanged, no Pillow OK',
+    )
+  } finally {
+    vision.dispose()
+  }
 } finally {
   adapter.dispose()
 }
 
-// (f) Dispose ends the worker process and closes the transport.
+// (g) Dispose ends the worker process and closes the transport.
 assert.ok(workerPid !== undefined, 'no PyBoy worker process was observed while the adapter was live')
 const deadline = Date.now() + 5_000
 while (workerPids().has(workerPid) && Date.now() < deadline) sleepSync(50)

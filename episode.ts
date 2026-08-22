@@ -1,9 +1,16 @@
 import type { InputStats } from './attestation'
 import { advanceRollout, finalizeRecord, startRollout } from './episode-loop'
-import type { InputLog, Game } from './runtime'
+import type { InputLog, Game, Observation } from './runtime'
 import type { MilestoneContract } from './schema'
 
-/** One prior action and the observation produced by that action. */
+/**
+ * One prior action and the observation text produced by that action.
+ *
+ * History is text only, deliberately. A driver replays the retained trajectory
+ * into every prompt, so keeping N turns of images would multiply the paid image
+ * tokens by the history depth on each decision and would grow the request with
+ * the run. The current turn carries the pixels; history carries what happened.
+ */
 export interface AgentHistoryEntry {
   input: string
   frame: string
@@ -29,6 +36,18 @@ export interface AgentDecisionContext {
    * and never part of the verified input log.
    */
   guidance?: string
+  /**
+   * The full observation for this decision, computed once by the harness.
+   *
+   * `observation.text` is exactly the driver's `frame` argument, so a text-only
+   * driver can ignore this field entirely. `observation.images` carries the
+   * rendered screen when the game publishes one and is absent otherwise.
+   *
+   * It is optional in the type because a caller may build a context by hand —
+   * a driver unit test does — and the text is already the first argument. Every
+   * harness-driven decision sets it.
+   */
+  observation?: Readonly<Observation>
   signal?: AbortSignal
 }
 

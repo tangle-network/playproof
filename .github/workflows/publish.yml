@@ -63,7 +63,7 @@ jobs:
       - name: Install exact dependencies
         run: pnpm install --frozen-lockfile
       - name: Compile Python workers
-        run: $PLAYPROOF_PYTHON -m compileall -q ale desktop gym native pyboy retro
+        run: $PLAYPROOF_PYTHON -m compileall -q ale desktop gym native pyboy pyshared retro
       - name: Run release-equivalent gate
         run: pnpm run ci
       - name: Build exact npm archive

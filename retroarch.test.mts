@@ -24,8 +24,9 @@ import { strict as assert } from 'node:assert'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { attestRun } from './attestation'
-import { logFrom } from './runtime'
+import { logFrom, observationOf } from './runtime'
 import { validateContract } from './schema'
+import { decodePng } from './test-png.mts'
 import type { DiscoveryDoc } from './adapters/pyboy-generic'
 import { RetroArchRpc } from './adapters/retroarch-rpc'
 import { channelsFromDiscovery, makeRetroArch, type RetroArch, type RetroArchState } from './adapters/retroarch'
@@ -84,6 +85,8 @@ interface Trace {
   /** Screen evidence, reported rather than asserted across processes. */
   screens: string[]
   engine: Record<string, number>[]
+  /** The state the last input produced, so a later check needs no fresh boot. */
+  last: RetroArchState
 }
 
 const gap = missing()
@@ -147,7 +150,7 @@ if (gap) {
       record(state)
       engine.push({ ...(adapter.game.evidence(state).engineState ?? {}) })
     }
-    return { pinned, all, screens, engine }
+    return { pinned, all, screens, engine, last: state }
   }
 
   const dead = async (pid: number | null): Promise<boolean> => {
@@ -170,7 +173,7 @@ if (gap) {
   let pinnedPaths: string[] = []
 
   // ── emulator 1: contract derivation, attestation, determinism in process ──
-  const adapter = makeRetroArch(options)
+  const adapter = makeRetroArch({ ...options, screenImage: true })
   try {
     // Identity: RetroArch loaded the content the discovery document pins, and
     // the adapter advertises this core's button vocabulary.
@@ -180,6 +183,7 @@ if (gap) {
     assert.ok(adapter.inputs.includes('NOOP') && adapter.inputs.includes('up+a'),
       `input vocabulary missing expected words: ${adapter.inputs.join(',')}`)
     assert.equal(adapter.identity.channels.length, channels.length)
+
 
     // Authoring: contract derived from the discovered channels with
     // event-anchored marks. No hash, position, or threshold is in the adapter.
@@ -231,6 +235,35 @@ if (gap) {
     assert.deepEqual(again.all, first.all, 'same-process replay diverged')
     assert.equal(first.all.length, prefix.length + 1)
 
+    // Observation images. This worker needs no encoder: RetroArch writes a PNG
+    // for SCREENSHOT and the evidence path already reads it, so the option
+    // republishes those exact bytes. The check rides the state the trace above
+    // just produced, because a state load reinitialises RetroArch's drivers
+    // and this gate must not add one to prove a picture.
+    assert.equal(adapter.identity.screenImage, true)
+    const observation = observationOf(adapter.game, first.last)
+    assert.equal(observation.text, adapter.game.frame(first.last))
+    assert.equal(observation.images?.length, 1)
+    const screen = observation.images![0]!
+    assert.equal(screen.mediaType, 'image/png')
+    // No filter expectation here: this is RetroArch's own file, and it picks
+    // a filter per scanline, which is exactly why the evidence hash covers the
+    // decoded pixels and never the bytes.
+    const decoded = decodePng(Buffer.from(screen.base64, 'base64'))
+    assert.deepEqual([screen.width, screen.height], [decoded.width, decoded.height])
+    // `frameHash` covers the DECODED pixels and never the file, because
+    // RetroArch picks a filter per scanline. That is what makes republishing
+    // the file sound, and it lets this gate prove the identity: the picture the
+    // agent is shown is the screen the verifier hashes.
+    assert.equal(
+      createHash('sha256').update(decoded.pixels).digest('hex'),
+      adapter.game.evidence(first.last).frameHash,
+    )
+    console.log(
+      `retroarch: observation image — ${decoded.width}x${decoded.height} PNG, ` +
+      `${Buffer.from(screen.base64, 'base64').length} bytes republished, pixels hash to frameHash`,
+    )
+
     // Unknown inputs are no-ops, not cheats and not errors.
     const junkWords = ['FLIBBERTIGIBBET', '', 'nope', 'b-not-a-button']
     let junkState = adapter.game.init(adapter.seed)
@@ -260,6 +293,9 @@ if (gap) {
   try {
     secondPid = second.identity.pid
     assert.equal(second.game.id, adapter.game.id)
+    // The image channel is off by default, and turning it on changed neither
+    // the game id nor anything a verifier recomputes.
+    assert.equal(second.identity.screenImage, false)
     const elsewhere = attestRun(
       second.game,
       adapter.contract,

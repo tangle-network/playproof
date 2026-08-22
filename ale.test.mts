@@ -9,12 +9,15 @@
  * Battery: contract derivation across three evidence tiers, known-good
  * attestation, garbage rejection, graded partial credit, cross-process
  * determinism including the save-state hash, checkpoint round-trip,
- * unknown-input no-op, and worker teardown. Zero model spend.
+ * unknown-input no-op, the observation image channel, and worker teardown.
+ * Zero model spend.
  */
 import { strict as assert } from 'node:assert'
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { attestRun } from './attestation'
-import { logFrom } from './runtime'
+import { logFrom, observationOf } from './runtime'
+import { decodePng, unscale } from './test-png.mts'
 import { validateContract } from './schema'
 import { AleRpc } from './adapters/ale-rpc'
 import { bundledReference, makeAle, type Ale, type AleState } from './adapters/ale'
@@ -144,6 +147,55 @@ if (!pythonHasAle()) {
       assert.throws(() => rpc.restore(Buffer.from('not a checkpoint')), /worker restore failed/)
     } finally {
       rpc.shutdown()
+    }
+
+    // Observation images: the worker encodes the SAME screen it hashes for
+    // evidence, so a vision agent sees the game instead of an ASCII downsample
+    // of it. The default adapter above published none, which is the whole
+    // point of the option: the byte cost is unchanged until a caller asks.
+    assert.equal(adapter.identity.screenImage, false)
+    assert.equal('images' in observationOf(adapter.game, adapter.game.init(adapter.seed)), false)
+
+    const vision = makeAle({ game: GAME, screenImage: true, screenScale: 3 })
+    try {
+      assert.equal(vision.identity.screenImage, true)
+      assert.equal(vision.identity.screenScale, 3)
+      let seen = vision.game.init(vision.seed)
+      for (const input of vision.reference.slice(0, 120)) seen = vision.game.step(seen, input)
+      const observation = observationOf(vision.game, seen)
+      assert.equal(observation.text, vision.game.frame(seen))
+      assert.equal(observation.images?.length, 1)
+      const image = observation.images![0]!
+      assert.equal(image.mediaType, 'image/png')
+
+      // The PNG really decodes, at the size the adapter declared, to a picture
+      // with more than one colour in it. A constant frame would mean the
+      // encoder ran on an empty buffer and the agent is shown nothing.
+      const decoded = decodePng(Buffer.from(image.base64, 'base64'), { expectFilterNone: true })
+      const [nativeHeight, nativeWidth] = adapter.identity.screen
+      assert.deepEqual([decoded.width, decoded.height], [nativeWidth * 3, nativeHeight * 3])
+      assert.deepEqual([image.width, image.height], [decoded.width, decoded.height])
+      assert.ok(decoded.colours > 1, 'the encoded screen is one flat colour')
+
+      // The strongest statement about this channel: the picture the agent is
+      // shown is the screen the verifier hashes. Undoing the whole-pixel
+      // upscale recovers the native buffer, and its SHA-256 is `frameHash`.
+      const native = createHash('sha256').update(unscale(decoded, 3)).digest('hex')
+      assert.equal(native, vision.game.evidence(seen).frameHash)
+
+      // The image path does not perturb the emulator: at the same instant of
+      // the same script, the evidence a verifier recomputes is identical.
+      let plain = adapter.game.init(adapter.seed)
+      for (const input of adapter.reference.slice(0, 120)) plain = adapter.game.step(plain, input)
+      assert.deepEqual(vision.game.evidence(seen), adapter.game.evidence(plain))
+
+      console.log(
+        `ale: observation image — ${decoded.width}x${decoded.height} PNG, ` +
+        `${Buffer.from(image.base64, 'base64').length} bytes encoded, ${image.base64.length} base64, ` +
+        `${decoded.colours} distinct colours, pixels hash to frameHash, evidence unchanged`,
+      )
+    } finally {
+      vision.dispose()
     }
 
     // Teardown: dispose kills the worker and every later call fails loudly

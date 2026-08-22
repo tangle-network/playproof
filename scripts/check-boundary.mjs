@@ -27,6 +27,7 @@ const productionPrefixes = [
   'native/',
   'platforms/',
   'pyboy/',
+  'pyshared/',
   'retro/',
   'retroarch/',
 ]
@@ -59,6 +60,31 @@ for (const path of files) {
   const text = await readFile(path, 'utf8')
   for (const token of forbiddenProductionText) {
     if (text.includes(token)) violations.push(`${rel} contains forbidden production dependency/text: ${token}`)
+  }
+}
+
+// The evidence boundary, checked rather than only asserted in prose.
+//
+// `Observation` is the agent's channel and `Evidence` is the harness's. The
+// two rules below are the parts of that boundary a static check can state: the
+// function that builds every observation must not read the privileged channel,
+// and a driver must not name it at all. Whether an ADAPTER puts privileged
+// state into an image caption cannot be decided here, because a caption is
+// arbitrary text; `observation.test.mts` covers that case with a game whose
+// evidence carries a value the agent channel must never show.
+const runtimeText = await readFile(new URL('../runtime.ts', import.meta.url), 'utf8')
+const observationStart = runtimeText.indexOf('export function observationOf')
+const observationEnd = runtimeText.indexOf('\n}\n', observationStart)
+if (observationStart < 0 || observationEnd < 0) {
+  violations.push('runtime.ts no longer defines observationOf; the observation boundary check cannot run')
+} else if (/evidence/iu.test(runtimeText.slice(observationStart, observationEnd))) {
+  violations.push('observationOf reads evidence; the privileged channel must never reach the agent')
+}
+for (const path of files) {
+  const rel = normalize(relative(rootPath, path))
+  if (!rel.startsWith('drivers/') || !rel.endsWith('.ts')) continue
+  if (/\bevidence\b/iu.test(await readFile(path, 'utf8'))) {
+    violations.push(`${rel} names evidence; a driver reads the observation channel only`)
   }
 }
 
