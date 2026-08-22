@@ -29,7 +29,7 @@ import type {
   MilestoneCostRow,
 } from './episode'
 import { observationTextOf, type Game, type InputLog } from './runtime'
-import { contractHash, type MilestoneContract } from './schema'
+import { contractHash, scoreMilestones, type MilestoneContract, type MilestoneScore } from './schema'
 
 /**
  * Trajectory entries kept in memory during a campaign.
@@ -121,6 +121,11 @@ export interface SegmentReport {
   newMilestones: MilestoneCostRow[]
   /** Milestones the live tracker observed so far, in observation order. */
   verifiedSoFar: string[]
+  /**
+   * Progress so far with the earnable denominator separated from the total, so
+   * an analyst reads "3 of 4 earnable" instead of "3 of 6".
+   */
+  scoreSoFar: MilestoneScore
   lastFrame: string
   recentHistory: AgentHistoryEntry[]
   /** Decision latencies of this segment only. */
@@ -263,6 +268,7 @@ export async function runCampaign<S>(
           remainingBudgetUsd: Math.max(0, budgetUsd - rollout.spent),
           newMilestones: rollout.milestones.slice(milestonesBefore),
           verifiedSoFar: rollout.tracker.verified(),
+          scoreSoFar: scoreMilestones(contract, rollout.tracker.verified()),
           // The segment report is a text ledger read by an analyst and written
           // to disk, so it carries the observation text and never its pixels.
           lastFrame: observationTextOf(game, rollout.state),
