@@ -8,7 +8,8 @@
  *
  * Battery: contract derivation across three evidence tiers, known-good
  * attestation, garbage rejection, graded partial credit, calibration with the
- * earnable split, cross-process determinism including the save-state hash,
+ * legible/opaque split and the opaque-collision sweep, cross-process
+ * determinism including the save-state hash,
  * checkpoint round-trip, unknown-input no-op, the observation image channel,
  * and worker teardown. Zero model spend.
  */
@@ -16,14 +17,40 @@ import { strict as assert } from 'node:assert'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { attestRun } from './attestation'
-import { assertContractSeparates, assertMilestonesEarnable, calibrateContract } from './calibration'
+import { assertContractSeparates, assertOpaqueChecksDeclared, calibrateContract } from './calibration'
 import { logFrom, observationOf } from './runtime'
 import { decodePng, unscale } from './test-png.mts'
-import { contractEarnability, formatMilestoneScore, scoreMilestones, validateContract } from './schema'
+import { contractLegibility, formatMilestoneScore, scoreMilestones, validateContract } from './schema'
 import { AleRpc } from './adapters/ale-rpc'
 import { bundledReference, makeAle, type Ale, type AleState } from './adapters/ale'
 
 const GAME = 'breakout'
+
+/**
+ * The opaque-collision sweep on the packaged Breakout contract, pinned.
+ *
+ * Both hashes fire after 32 inputs. Over the vocabulary NOOP/FIRE/RIGHT/LEFT
+ * that prefix admits 96 single-input substitutions, and 40 of them still
+ * reproduce both hashes, at 16 of the 32 turns. Applying one alternative at
+ * every free turn at once reproduces them too, which is why the family bound
+ * multiplies out instead of adding.
+ *
+ * These numbers are the correction to #22, which concluded from a clean
+ * trivial-baseline result that a hash could only be reached by replaying the
+ * reference. A regression here means ale-py, the ROM, or the reference moved.
+ */
+const ALE_BREAKOUT_COLLISIONS = [
+  {
+    milestone: 'frame-at-first-score',
+    firesAfter: 32, probedTurns: 32, substitutions: 96,
+    collisions: 40, freeTurns: 16, jointCollision: true, family: 382205952,
+  },
+  {
+    milestone: 'save-at-first-score',
+    firesAfter: 32, probedTurns: 32, substitutions: 96,
+    collisions: 40, freeTurns: 16, jointCollision: true, family: 382205952,
+  },
+]
 const python = process.env.PLAYPROOF_PYTHON ?? 'python3'
 
 /** The bundled ROM must be present, not just the package. */
@@ -110,31 +137,32 @@ if (!pythonHasAle()) {
     assert.deepEqual(partial.verified, ['score-opened', 'frame-at-first-score', 'save-at-first-score', 'score-tier-2'])
     assert.deepEqual(partial.reasons, ['claimed-not-reproduced:score-tier-4,life-lost'])
 
-    // The reference verified all six milestones, and only four of them are
-    // progress. `frame-at-first-score` and `save-at-first-score` hash the exact
-    // screen and save state this trajectory produced, so reaching them means
-    // reproducing this run rather than playing Breakout.
-    assert.deepEqual(contractEarnability(adapter.contract), {
-      earnable: ['score-opened', 'score-tier-2', 'score-tier-4', 'life-lost'],
-      unearnable: ['frame-at-first-score', 'save-at-first-score'],
+    // A hash check identifies a STATE, not a trajectory. Both hashes here name
+    // the exact screen and save state the reference stood in when it first
+    // scored, and any policy that stands in that state earns them. They are
+    // points, so the honest denominator is six.
+    //
+    // What they are not is readable: `frame-at-first-score` says nothing a
+    // contract reader can weigh, while `score-tier-4` says score >= 4.
+    assert.deepEqual(contractLegibility(adapter.contract), {
+      legible: ['score-opened', 'score-tier-2', 'score-tier-4', 'life-lost'],
+      opaque: ['frame-at-first-score', 'save-at-first-score'],
       reasons: {
-        'frame-at-first-score': "its frame-hash check pins the reference run's exact bytes",
-        'save-at-first-score': "its save-hash check pins the reference run's exact bytes",
+        'frame-at-first-score':
+          'its frame-hash check states its requirement as a hash, so a reader cannot see what it demands',
+        'save-at-first-score':
+          'its save-hash check states its requirement as a hash, so a reader cannot see what it demands',
       },
     })
-    assert.deepEqual(good.earned, ['score-opened', 'score-tier-2', 'score-tier-4', 'life-lost'])
-    assert.deepEqual(good.score, { verified: 6, earned: 4, earnable: 4, total: 6 })
-    assert.equal(formatMilestoneScore(partial.score), '2 of 4 earnable (4 of 6 verified, 2 replay-identity)')
+    assert.deepEqual(good.score, { verified: 6, total: 6 })
+    assert.equal(formatMilestoneScore(partial.score), '4 of 6')
 
-    // The measured defect this split exists for. An authored policy and a
-    // hand-written ball tracker each verified score-opened, score-tier-2 and
-    // life-lost on this contract, and neither reproduced either hash. Both
-    // read as three of six. Three of four is the honest statement, and it is
-    // the whole of what an independent policy can score.
+    // A run that played Breakout and did not land on the pinned state scores
+    // three of six. Three of four was the wrong statement: it removed two
+    // points from the denominator that a policy can, and does, reach.
     const played = ['score-opened', 'score-tier-2', 'life-lost']
-    assert.deepEqual(scoreMilestones(adapter.contract, played), { verified: 3, earned: 3, earnable: 4, total: 6 })
-    assert.equal(formatMilestoneScore(scoreMilestones(adapter.contract, played)),
-      '3 of 4 earnable (3 of 6 verified, 2 replay-identity)')
+    assert.deepEqual(scoreMilestones(adapter.contract, played), { verified: 3, total: 6 })
+    assert.equal(formatMilestoneScore(scoreMilestones(adapter.contract, played)), '3 of 6')
 
     // Calibration on the real emulator. Every baseline plays the reference's
     // 210 turns, so the comparison is length-matched.
@@ -146,27 +174,53 @@ if (!pythonHasAle()) {
     for (const outcome of [calibration.reference, ...calibration.baselines]) {
       console.log(`  ${outcome.id.padEnd(32)} ${String(outcome.verified.length).padStart(2)}  ${outcome.verdict}  ${outcome.verified.join(',') || '-'}`)
     }
-    assert.deepEqual(calibration.earnable, ['score-opened', 'score-tier-2', 'score-tier-4', 'life-lost'])
-    assert.deepEqual(calibration.unearnable, ['frame-at-first-score', 'save-at-first-score'])
-    assert.deepEqual(calibration.referenceScore, { verified: 6, earned: 4, earnable: 4, total: 6 })
-    // No trivial policy reproduced either hash, so both really are identity
-    // checks on this substrate and not low-entropy channels.
-    assert.deepEqual(calibration.unearnableReproduced, [])
+    assert.deepEqual(calibration.legible, ['score-opened', 'score-tier-2', 'score-tier-4', 'life-lost'])
+    assert.deepEqual(calibration.opaque, ['frame-at-first-score', 'save-at-first-score'])
+    assert.deepEqual(calibration.referenceScore, { verified: 6, total: 6 })
+    // No trivial policy reproduced either hash. That was the whole of the
+    // evidence #22 had for calling them unearnable, and it proves nothing: the
+    // baseline suite cannot serve a ball, let alone score.
+    assert.deepEqual(calibration.opaqueReproduced, [])
+
+    // The substitution sweep is the prober that can. Both hashes fire after 32
+    // inputs; the sweep replaces one input of that prefix at a time over
+    // NOOP/FIRE/RIGHT/LEFT and counts the logs that still satisfy the check.
+    // FIRE while the ball is already in flight is a state no-op, so a large
+    // family of logs reaches a bit-identical emulator state.
+    for (const row of calibration.collisions) {
+      console.log(
+        `  ${row.milestone.padEnd(24)} fires after ${row.firesAfter}; ` +
+        `${row.collisions}/${row.substitutions} substitutions collide at ${row.freeTurns}/${row.probedTurns} turns; ` +
+        `joint=${row.jointCollision}; family >= ${row.family.toExponential(2)}`,
+      )
+    }
+    assert.deepEqual(calibration.collisions, ALE_BREAKOUT_COLLISIONS)
+
     // Undeclared, the contract cannot ship, whatever the separation verdict.
-    assert.throws(() => assertMilestonesEarnable(calibration), /2 of 6 milestone\(s\) no policy can earn/u)
-    const declared = { identityChecks: ['frame-at-first-score', 'save-at-first-score'] }
-    assertMilestonesEarnable(calibration, declared)
+    assert.throws(() => assertOpaqueChecksDeclared(calibration), /states 2 of 6 milestone\(s\) as a hash/u)
+    // Declaring them opaque is still not enough, because the sweep measured
+    // the collisions. The author must accept the weakness by id.
+    assert.throws(
+      () => assertOpaqueChecksDeclared(calibration, { opaqueChecks: ['frame-at-first-score', 'save-at-first-score'] }),
+      /2 opaque milestone\(s\) are satisfied by input logs other than the reference/u,
+    )
+    const declared = {
+      opaqueChecks: ['frame-at-first-score', 'save-at-first-score'],
+      weakChecks: ['frame-at-first-score', 'save-at-first-score'],
+    }
+    assertOpaqueChecksDeclared(calibration, declared)
     // Whether Breakout separates is a fact about the ROM, not about this
-    // change: assert only that the earnable comparison is the one being made.
+    // change: assert only that the legible comparison is the one being made.
+    const referenceLegible = calibration.reference.verified.filter((id) => calibration.legible.includes(id)).length
     assert.equal(
       calibration.separates,
-      calibration.separating.length > 0 && calibration.referenceScore.earned > calibration.bestBaselineEarnedCount,
+      calibration.separating.length > 0 && referenceLegible > calibration.bestBaselineLegibleCount,
     )
     if (calibration.separates) assertContractSeparates(calibration, declared)
     else assert.throws(() => assertContractSeparates(calibration, declared), /does not separate/u)
     console.log(
       `ale: calibration — reference ${formatMilestoneScore(calibration.referenceScore)}, ` +
-      `best trivial baseline ${calibration.bestBaselineEarnedCount} earnable over ${calibration.turns} turns, ` +
+      `best trivial baseline ${calibration.bestBaselineLegibleCount} legible over ${calibration.turns} turns, ` +
       `separating=${calibration.separating.join(',') || 'nothing'}, separates=${calibration.separates}`,
     )
 

@@ -8,23 +8,16 @@
  */
 import { logFrom } from './runtime'
 import type { Evidence, Game, Input, InputLog } from './runtime'
-import { contractHash, earnedMilestones, scoreMilestones } from './schema'
+import { contractHash, scoreMilestones } from './schema'
 import type { Milestone, MilestoneContract, MilestoneScore, NumericOperator } from './schema'
 
 export interface Attestation {
   gameId: string
   verdict: 'clean' | 'rejected'
   reasons: string[]
-  /** Every milestone the replay reproduced, replay-identity checks included. */
+  /** Every milestone the replay reproduced. */
   verified: string[]
-  /**
-   * The subset of `verified` an independent policy can earn by playing.
-   *
-   * A hash check proves a replay reproduced the recorded run. Counting it as
-   * progress inflates the denominator of every reported score, so the two sets
-   * are reported apart. `verified` stays the attestation statement.
-   */
-  earned: string[]
+  /** `verified` over the contract's milestone count. */
   score: MilestoneScore
   checks: { name: string; passed: boolean }[]
 }
@@ -119,7 +112,6 @@ export function attestRun<S>(
     verdict: reasons.length === 0 ? 'clean' : 'rejected',
     reasons,
     verified,
-    earned: earnedMilestones(contract, verified),
     score: scoreMilestones(contract, verified),
     checks: [
       { name: 'input-log-chain', passed: chainOk },

@@ -118,20 +118,23 @@ Over the same 70 turns, on the same ROM and the same contract:
 The finding is not a Libbet defect and not a PyBoy defect.
 It is what a derived contract is worth before somebody measures it.
 
-### Earnable milestones and replay-identity checks
+### Legible checks and opaque ones
 
 A derived contract fails in a second way, and the separation test alone cannot see it.
-`deriveContract` samples whatever the mark asks for, so a mark that asks for a frame hash or a save hash pins the exact bytes the reference run produced.
-No independent policy earns such a milestone. Reaching it means reproducing the reference, not playing.
-Because no trivial baseline earns it either, the separation test used to read it as the contract's strongest evidence.
+`deriveContract` samples whatever the mark asks for, so a mark that asks for a frame hash or a save hash writes a check nobody can read.
 
-`contractEarnability(contract)` splits the milestones by check kind, and follows `requires`: a threshold gated behind a hash is unreachable too.
-`assertContractSeparates` and `assertMilestonesEarnable` refuse a contract whose unearnable milestones the author has not declared by id.
+A hash identifies a **state**, not a trajectory, so it is a point an independent policy earns by reaching that state.
+What it cannot do is say which state, or how many ways there are in.
+Because no trivial baseline reaches it either, the separation test used to read it as the contract's strongest evidence.
+
+`contractLegibility(contract)` splits the milestones by check kind, and follows `requires`: a threshold gated behind a hash is opaque too.
+`assertContractSeparates` and `assertOpaqueChecksDeclared` refuse a contract whose opaque milestones the author has not declared by id.
 The declaration is an exact set, so a hash milestone that a later derivation adds cannot enter a published contract unnoticed.
 
-Every packaged contract, by check kind and `requires` graph:
+Every packaged contract, by check kind and `requires` graph.
+Every milestone is a point, so the **Milestones** column is the denominator of a score on that contract:
 
-| Contract | Milestones | Earnable | Replay-identity |
+| Contract | Milestones | Legible | Opaque |
 |---|---|---|---|
 | ALE Breakout | 6 | 4 | 2 — `frame-at-first-score`, `save-at-first-score` |
 | Libbet through `pyboy-generic` | 6 | 4 | 2 — `state-at-first-progression`, `frame-at-first-progression` |
@@ -148,15 +151,19 @@ Every packaged contract, by check kind and `requires` graph:
 The Breakout and Libbet rows are asserted against the running emulator in `ale.test.mts` and `pyboy-libbet.test.mts`.
 The rest follow from the check kinds their references declare, which is the whole of the rule.
 
-Keep the identity checks. They are the whole of what replay attestation proves.
-Declare them, and report the score as earned over earnable:
+Keep the opaque checks where a legible one cannot state the progression.
+Declare them, and quote the score over the full milestone count:
 
 ```ts
 const report = calibrateContract(game, contract, { reference, vocabulary })
 assertContractSeparates(report, {
-  identityChecks: ['frame-at-first-score', 'save-at-first-score'],
+  opaqueChecks: ['frame-at-first-score', 'save-at-first-score'],
+  weakChecks: ['frame-at-first-score', 'save-at-first-score'],
 })
 ```
+
+`report.collisions` carries the measured strength of each opaque check: how many single-input substitutions of the reference still satisfy it, at how many turns, and a lower bound on the family of logs that do.
+On Breakout that bound is 3.82 × 10⁸ distinct 32-input logs, so the two hashes name a state a great many trajectories reach.
 
 ## Libretro consoles through stable-retro
 

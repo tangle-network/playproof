@@ -1,9 +1,11 @@
 /**
  * Playproof milestone-contract schema — the game-agnostic progression language.
  *
- * Exact hashes remain available for identity checkpoints. Semantic milestones
- * should prefer normalized state/save/frame paths so two different valid ways
- * of reaching the same progress do not collapse to one reference trajectory.
+ * A check is a statement about a game STATE. A state/save/frame path or a log
+ * event states it in the open; a hash states the same kind of thing opaquely,
+ * naming one exact state without saying which. Both are earnable by playing.
+ * Prefer a path or an event, because a reader can then judge what the contract
+ * asks for.
  */
 import { createHash } from 'node:crypto'
 
@@ -109,79 +111,81 @@ export function contractHash(c: MilestoneContract): string {
 }
 
 /**
- * What a milestone's check can prove.
+ * How a check states its requirement.
  *
- * `achievement` — a threshold, a normalized field, or an event that an
- * independent policy reaches by playing. Two different valid trajectories can
- * both satisfy it.
+ * `legible` — a threshold, a normalized field, or an event. A reader sees what
+ * the milestone demands and can judge whether reaching it is progress.
  *
- * `identity` — a hash over the exact bytes one recorded run produced. It proves
- * that a replay reproduced that run, which is what replay attestation is for.
- * It is not a progression: earning it means reproducing the reference's frame
- * or save, not playing well.
+ * `opaque` — a hash. It demands one exact game state, and a reader cannot tell
+ * which state, nor how many trajectories reach it. It is an achievement like
+ * any other: a hash identifies a STATE, not a trajectory, so an independent
+ * policy that reaches that state earns it without ever seeing the reference.
+ * Measured on ALE Breakout: of 96 single-input substitutions of the reference
+ * over the 32-turn prefix, 40 still reproduced both pinned hashes, at 16 of
+ * the 32 turns; all 16 applied at once reproduced them too.
+ *
+ * Do not confuse an opaque check with replay attestation. The input-log hash
+ * chain is what proves a replay reproduced a recorded run. A milestone hash
+ * proves only that some run stood in one state.
  */
-export type MilestoneRole = 'achievement' | 'identity'
+export type CheckLegibility = 'legible' | 'opaque'
 
-const ROLE_FOR_CHECK: Record<MilestoneCheck['kind'], MilestoneRole> = {
-  'state-path': 'achievement',
-  'save-path': 'achievement',
-  'save-hash': 'identity',
-  'log-contains': 'achievement',
-  'frame-path': 'achievement',
-  'frame-hash': 'identity',
+const LEGIBILITY_FOR_CHECK: Record<MilestoneCheck['kind'], CheckLegibility> = {
+  'state-path': 'legible',
+  'save-path': 'legible',
+  'save-hash': 'opaque',
+  'log-contains': 'legible',
+  'frame-path': 'legible',
+  'frame-hash': 'opaque',
 }
 
 /**
- * The role a check carries, derived from its kind.
+ * Whether a reader can see what a check demands, derived from its kind.
  *
- * The role is derived rather than declared so that an existing contract keeps
+ * The value is derived rather than declared so that an existing contract keeps
  * its bytes and its hash, and so that an author cannot forget to set it. A
- * hash check is an identity check whatever the author intended.
+ * hash check is opaque whatever the author intended.
  */
-export function checkRole(check: MilestoneCheck): MilestoneRole {
-  return ROLE_FOR_CHECK[check.kind]
+export function checkLegibility(check: MilestoneCheck): CheckLegibility {
+  return LEGIBILITY_FOR_CHECK[check.kind]
 }
 
-/** Which milestones of a contract an independent policy can earn. */
-export interface ContractEarnability {
-  /** Milestone ids an independent policy can earn by playing. */
-  earnable: string[]
-  /** Milestone ids only a replay of the reference run earns. */
-  unearnable: string[]
-  /** Why each unearnable milestone is out of reach, keyed by milestone id. */
+/** Which milestones of a contract state their requirement in the open. */
+export interface ContractLegibility {
+  /** Milestone ids whose requirement a reader can read off the contract. */
+  legible: string[]
+  /** Milestone ids whose requirement is a hash, or is gated behind one. */
+  opaque: string[]
+  /** Why each opaque milestone cannot be read, keyed by milestone id. */
   reasons: Record<string, string>
 }
 
 /**
- * Split a contract into the milestones a policy can earn and the ones it cannot.
+ * Split a contract into the milestones a reader can understand and the ones
+ * stated as a hash.
  *
- * A milestone is unearnable when its own check pins exact bytes, and also when
- * it depends on one that does: `MilestoneTracker` admits a milestone only after
- * every prerequisite has passed, so an achievement gated behind a hash is as
- * unreachable as the hash. A milestone with a missing or cyclic requirement is
- * unearnable for the same reason — no run ever satisfies it.
+ * Opacity propagates through `requires`: `MilestoneTracker` admits a milestone
+ * only after every prerequisite passed, so a legible check gated behind a hash
+ * still demands something a reader cannot see. A missing or cyclic requirement
+ * is not judged here — `validateContract` reports those.
  */
-export function contractEarnability(contract: MilestoneContract): ContractEarnability {
+export function contractLegibility(contract: MilestoneContract): ContractLegibility {
   const byId = new Map(contract.milestones.map((m) => [m.id, m]))
   const decided = new Map<string, string | null>()
   const visiting = new Set<string>()
   const reasonFor = (m: Milestone): string | null => {
     const cached = decided.get(m.id)
     if (cached !== undefined) return cached
-    if (visiting.has(m.id)) return `sits on a dependency cycle, so no run satisfies it`
+    if (visiting.has(m.id)) return null
     visiting.add(m.id)
     let reason: string | null = null
-    if (checkRole(m.check) === 'identity') {
-      reason = `its ${m.check.kind} check pins the reference run's exact bytes`
+    if (checkLegibility(m.check) === 'opaque') {
+      reason = `its ${m.check.kind} check states its requirement as a hash, so a reader cannot see what it demands`
     } else {
       for (const required of m.requires) {
         const prerequisite = byId.get(required)
-        if (prerequisite === undefined) {
-          reason = `requires ${required}, which the contract does not declare`
-          break
-        }
-        if (reasonFor(prerequisite) !== null) {
-          reason = `requires ${required}, which no independent policy can earn`
+        if (prerequisite !== undefined && reasonFor(prerequisite) !== null) {
+          reason = `requires ${required}, whose requirement is opaque`
           break
         }
       }
@@ -191,63 +195,34 @@ export function contractEarnability(contract: MilestoneContract): ContractEarnab
     return reason
   }
 
-  const earnable: string[] = []
-  const unearnable: string[] = []
+  const legible: string[] = []
+  const opaque: string[] = []
   const reasons: Record<string, string> = {}
   for (const m of contract.milestones) {
     const reason = reasonFor(m)
-    if (reason === null) earnable.push(m.id)
+    if (reason === null) legible.push(m.id)
     else {
-      unearnable.push(m.id)
+      opaque.push(m.id)
       reasons[m.id] = reason
     }
   }
-  return { earnable, unearnable, reasons }
+  return { legible, opaque, reasons }
 }
 
-/**
- * A run's progress against a contract, with the earnable denominator separated
- * from the total.
- *
- * `earned` over `earnable` is the score a run may be compared on. `verified`
- * over `total` includes the replay-identity checks, which only a replay of the
- * reference reproduces.
- */
+/** A run's progress against a contract. Every milestone counts, hashes included. */
 export interface MilestoneScore {
-  /** Milestones the run verified, replay-identity checks included. */
+  /** Milestones the run verified. */
   verified: number
-  /** Of those, the ones an independent policy can earn. */
-  earned: number
-  /** Milestones of the contract an independent policy can earn. */
-  earnable: number
   /** Milestones of the contract. */
   total: number
 }
 
-/** The verified milestones an independent policy can earn, in verified order. */
-export function earnedMilestones(contract: MilestoneContract, verified: readonly string[]): string[] {
-  const earnable = new Set(contractEarnability(contract).earnable)
-  return verified.filter((id) => earnable.has(id))
-}
-
 /** Score a verified milestone set against its contract. */
 export function scoreMilestones(contract: MilestoneContract, verified: readonly string[]): MilestoneScore {
-  const { earnable } = contractEarnability(contract)
-  const set = new Set(earnable)
-  return {
-    verified: verified.length,
-    earned: verified.filter((id) => set.has(id)).length,
-    earnable: earnable.length,
-    total: contract.milestones.length,
-  }
+  return { verified: verified.length, total: contract.milestones.length }
 }
 
-/** One line for a report or a log. Never states an earned count alone. */
+/** One line for a report or a log. */
 export function formatMilestoneScore(score: MilestoneScore): string {
-  const identity = score.total - score.earnable
-  if (identity === 0) return `${score.earned} of ${score.earnable} earnable`
-  return (
-    `${score.earned} of ${score.earnable} earnable ` +
-    `(${score.verified} of ${score.total} verified, ${identity} replay-identity)`
-  )
+  return `${score.verified} of ${score.total}`
 }

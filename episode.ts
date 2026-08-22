@@ -97,15 +97,9 @@ export interface EpisodeRecord {
   spentUsd: number
   budgetUsd: number
   budgetExhausted: boolean
-  /** Every milestone the replay reproduced, replay-identity checks included. */
+  /** Every milestone the replay reproduced. */
   verified: string[]
-  /** The subset of `verified` an independent policy can earn by playing. */
-  earned: string[]
-  /**
-   * The run's progress with the earnable denominator separated from the total.
-   * Report `earned` of `earnable`; `verified` of `total` counts hash checks
-   * that only a replay of the reference reproduces.
-   */
+  /** `verified` over the contract's milestone count. */
   score: MilestoneScore
   milestones: MilestoneCostRow[]
   replayDivergence: boolean
