@@ -2,7 +2,7 @@
 
 All notable changes to Playproof are documented here.
 
-## Unreleased
+## 0.7.0
 
 ### An episode can end because the game ended
 
