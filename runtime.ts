@@ -71,6 +71,27 @@ export interface Game<S> {
   observe?(state: S): Observation
   /** Privileged progression channel — harness-side only. */
   evidence(state: S): Evidence
+  /**
+   * Whether the game is finished, so that no further input can change it.
+   *
+   * The member is optional and a game that omits it is never over. That is
+   * what a game with no terminal state means, and it is what every adapter
+   * written before this member already did.
+   *
+   * It must be PURE, like `step`. A verifier replays the input log, recomputes
+   * the final state, and asks again; an answer that reads wall time or the
+   * live process would make "this episode stopped at game over" a claim the
+   * verifier cannot reproduce.
+   *
+   * Derive it from state the adapter already holds. An emulator adapter reads
+   * the terminal flag its worker publishes in `evidence().engineState`. There
+   * is no shared spelling of that flag across substrates — ALE writes
+   * `terminal`, Gymnasium writes `terminated` and `truncated`, stable-retro
+   * writes `episodeDone`, the 2048 core writes `gameOver` — so the mapping
+   * belongs to the adapter that knows its own engine, not to a guess the
+   * harness makes over field names.
+   */
+  over?(state: S): boolean
 }
 
 /**
@@ -157,6 +178,22 @@ export function observationTextOf<S>(game: Game<S>, state: S): string {
   const text = game.observe(state).text
   if (typeof text !== 'string') throw new Error(`game ${game.id} observe() returned no text`)
   return text
+}
+
+/**
+ * Whether a game declares this state finished, with the never-over default.
+ *
+ * Every path that asks the question goes through this function, so a game that
+ * publishes no terminal state answers the same way everywhere: the episode
+ * loop, the campaign loop, and the record all read one definition.
+ */
+export function isGameOver<S>(game: Game<S>, state: S): boolean {
+  if (game.over === undefined) return false
+  const over = game.over(state)
+  if (typeof over !== 'boolean') {
+    throw new Error(`game ${game.id} over() returned ${typeof over}, expected a boolean`)
+  }
+  return over
 }
 
 /** Validate one image against the bounds and return its decoded byte count. */

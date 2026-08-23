@@ -15,6 +15,7 @@ import { strict as assert } from 'node:assert'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { attestRun } from './attestation'
+import { playEpisode, scriptedDriver } from './episode'
 import { logFrom } from './runtime'
 import { validateContract } from './schema'
 import { GymRpc } from './adapters/gym-rpc'
@@ -176,6 +177,30 @@ if (!pythonHasGymnasium()) {
     for (const input of ['a0', 'a1', 'a2']) ended = lake.game.step(ended, input)
     assert.deepEqual(lake.game.evidence(ended), atEnd, 'a terminated episode kept stepping')
 
+    // The game-over stop on a second real substrate. FrozenLake terminates
+    // when the walk reaches the goal, and the worker freezes the environment
+    // there, so every later decision is inert exactly as ALE's is.
+    // Bound once: the driver factory is a closure, and `lake` is the mutable
+    // handle the teardown clears.
+    const frozenLake = lake
+    const LAKE_TURNS = frozenLake.reference.length + 20
+    const walk = () => scriptedDriver([...frozenLake.reference])
+    const lakeFull = await playEpisode(frozenLake.game, frozenLake.contract, walk(), 1, LAKE_TURNS, frozenLake.seed)
+    const lakeStopped = await playEpisode(
+      frozenLake.game, frozenLake.contract, walk(), 1, LAKE_TURNS, frozenLake.seed, undefined, { stopAtGameOver: true },
+    )
+    assert.equal(lakeFull.record.turns, LAKE_TURNS)
+    assert.equal(lakeFull.record.stoppedBy, 'maxTurns')
+    assert.equal(lakeFull.record.gameOver, true)
+    assert.equal(lakeStopped.record.turns, frozenLake.reference.length)
+    assert.equal(lakeStopped.record.stoppedBy, 'gameOver')
+    assert.deepEqual(lakeStopped.record.verified, lakeAll)
+    assert.deepEqual(lakeStopped.record.verified, lakeFull.record.verified)
+    assert.equal(lakeStopped.record.verdict, 'clean')
+    assert.equal(lakeStopped.record.replayDivergence, false)
+    const lakeRecomputed = attestRun(frozenLake.game, frozenLake.contract, frozenLake.seed, lakeStopped.log, [...lakeStopped.record.verified])
+    assert.equal(lakeRecomputed.verdict, 'clean', lakeRecomputed.reasons.join('; '))
+
     // Determinism across processes on the second environment too.
     const lakeFirst = trace(lake, lake.reference)
     second = makeGymnasium({ envId: FROZENLAKE })
@@ -202,7 +227,9 @@ if (!pythonHasGymnasium()) {
       `gymnasium: ${cartpole.identity.envId} on ${cartpole.identity.actionSpace} and ${FROZENLAKE} — ` +
       `derivation, ${cartpole.contract.milestones.length}+${lakeAll.length}-milestone contracts, known-good, ` +
       `graded partial, false-claim, cross-process determinism over ${first.length} snapshots, ` +
-      `engine and replay checkpoints, unknown-input no-op, teardown OK ` +
+      `engine and replay checkpoints, unknown-input no-op, ` +
+      `game-over stop at ${lakeStopped.record.turns} of ${LAKE_TURNS} FrozenLake decisions ` +
+      `(${lakeFull.record.turns - lakeStopped.record.turns} dropped, milestones unchanged), teardown OK ` +
       `(reference balances ${finalState.steps} steps for reward ${finalState.cumulativeReward / 1000})`,
     )
   } finally {

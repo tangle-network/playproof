@@ -240,6 +240,11 @@ export function makeGymnasium(options: GymnasiumOptions): Gymnasium {
     },
     frame: (s) => s.frameText,
     evidence: (s) => s.evidence,
+    // Gymnasium ends an episode two ways and the worker publishes both:
+    // `terminated` is the environment's own goal or failure, `truncated` is
+    // its time limit. The worker freezes the environment on either, so both
+    // mean no further input changes anything.
+    over: (s) => s.evidence.engineState?.terminated === 1 || s.evidence.engineState?.truncated === 1,
   }
 
   try {

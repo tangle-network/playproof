@@ -26,9 +26,10 @@ import type {
   AgentDriver,
   AgentHistoryEntry,
   EpisodeRecord,
+  EpisodeStop,
   MilestoneCostRow,
 } from './episode'
-import { observationTextOf, type Game, type InputLog } from './runtime'
+import { isGameOver, observationTextOf, type Game, type InputLog } from './runtime'
 import { contractHash, scoreMilestones, type MilestoneContract, type MilestoneScore } from './schema'
 
 /**
@@ -47,6 +48,7 @@ export type CampaignStop =
   | 'segmentLimit'
   | 'maxTurns'
   | 'budget'
+  | 'gameOver'
   | 'steering'
   | 'analyst'
   | 'abort'
@@ -160,6 +162,14 @@ export interface CampaignOptions {
   steer?: (report: SegmentReport, analysis: Analysis | null) => Promise<Steering | null>
   /** Persistence hook. Save the ledger here so a killed process can resume. */
   onLedger?: (ledger: CampaignLedger) => void | Promise<void>
+  /**
+   * End the campaign as soon as the game declares itself over. Off by default,
+   * for the reason `EpisodeOptions.stopAtGameOver` states: episode length is a
+   * denominator, and shortening it is the caller's decision.
+   *
+   * A resumed campaign whose game already ended plays no further segment.
+   */
+  stopAtGameOver?: boolean
   signal?: AbortSignal
 }
 
@@ -207,8 +217,18 @@ export async function runCampaign<S>(
 
   let guidance = resumeGuidance(ledger)
   let stopped = false
+  // Why the whole campaign ended, once it is known. Null while it is still the
+  // limits that decide, which the tail of this function reads off the rollout.
+  let endedBy: EpisodeStop | null = null
   while (!stopped && rollout.turns < maxTurns && rollout.spent < budgetUsd) {
     options.signal?.throwIfAborted()
+    // A campaign resumed from a ledger whose game already ended starts no new
+    // segment and records none. An empty segment would report a boundary the
+    // run never played to.
+    if (options.stopAtGameOver === true && isGameOver(game, rollout.state)) {
+      endedBy = 'gameOver'
+      break
+    }
     const segment = ledger.segments.length
     const startTurn = rollout.turns + 1
     const guidanceInEffect = guidance
@@ -225,6 +245,7 @@ export async function runCampaign<S>(
         maxTurns,
         maxDecisions: segmentTurns,
         ...(guidance === undefined ? {} : { guidance }),
+        ...(options.stopAtGameOver === undefined ? {} : { stopAtGameOver: options.stopAtGameOver }),
         ...(options.signal === undefined ? {} : { signal: options.signal }),
       })
     } catch (error) {
@@ -301,12 +322,19 @@ export async function runCampaign<S>(
         }
         // Explicit steering outranks the analyst; a stop from either ends the run.
         guidance = nextGuidance(guidance, steering, analysis)
-        stopped = steering?.stop === true || analysis?.recommendation === 'stop'
+        const hookStop = steering?.stop === true
+          ? 'steering'
+          : analysis?.recommendation === 'stop' ? 'analyst' : null
         // A hard limit that already ended the segment keeps its own reason.
-        if (stopped && stoppedBy === 'segmentLimit') {
-          stoppedBy = steering?.stop === true ? 'steering' : 'analyst'
-          segmentRecord.stoppedBy = stoppedBy
+        if (hookStop !== null && stoppedBy === 'segmentLimit') {
+          stoppedBy = hookStop
+          segmentRecord.stoppedBy = hookStop
         }
+        // A finished game ends the campaign whatever a hook advises: there is
+        // nothing left to play, and no note can restart it.
+        if (stoppedBy === 'gameOver') endedBy = 'gameOver'
+        else if (hookStop !== null) endedBy = hookStop
+        stopped = endedBy !== null
       }
     } finally {
       ledger.updatedAt = new Date().toISOString()
@@ -315,7 +343,9 @@ export async function runCampaign<S>(
     if (abortError !== undefined) throw abortError
   }
 
-  const record = finalizeRecord(game, contract, seed, rollout, budgetUsd, started)
+  // The record states why the CAMPAIGN ended, not why its last segment paused.
+  const runStop: EpisodeStop = endedBy ?? (rollout.turns >= maxTurns ? 'maxTurns' : 'budget')
+  const record = finalizeRecord(game, contract, seed, rollout, budgetUsd, started, runStop)
   syncLedger(ledger, rollout)
   // Replay-verified progress supersedes the live tracker once the run is over.
   ledger.verified = [...record.verified]
@@ -479,6 +509,7 @@ function isStop(value: unknown): value is CampaignStop {
   return value === 'segmentLimit'
     || value === 'maxTurns'
     || value === 'budget'
+    || value === 'gameOver'
     || value === 'steering'
     || value === 'analyst'
     || value === 'abort'

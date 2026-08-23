@@ -14,6 +14,8 @@ export interface ExecuteBenchmarkOptions {
   budgetUsd: number
   maxTurns: number
   seed?: number
+  /** End the run as soon as the game declares itself over. Off by default. */
+  stopAtGameOver?: boolean
   signal?: AbortSignal
   actor: RunEnvelope['actor']
   signer: {
@@ -51,6 +53,7 @@ export async function executeBenchmark<S>(
     options.maxTurns,
     seed,
     options.signal,
+    { ...(options.stopAtGameOver === undefined ? {} : { stopAtGameOver: options.stopAtGameOver }) },
   )
   if (turns.length !== record.latencyMs.length || turns.length !== log.inputs().length) {
     throw new Error(`decision capture mismatch: turns=${turns.length} latency=${record.latencyMs.length} log=${log.inputs().length}`)

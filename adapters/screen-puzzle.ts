@@ -34,6 +34,9 @@ export const screenPuzzle: Game<PuzzleState> = {
     engineState: { x: s.x },
     frameHash: hashString(render(s)),
   }),
+  // The far gate is the end of the puzzle: at the last column no input moves
+  // the piece any more, so the state machine is finished.
+  over: (s) => s.x >= PUZZLE_WIDTH - 1,
 }
 
 export const screenPuzzleContract = (): MilestoneContract =>

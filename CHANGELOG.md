@@ -2,6 +2,32 @@
 
 All notable changes to Playproof are documented here.
 
+## Unreleased
+
+### An episode can end because the game ended
+
+- **The measurement.** A consumer running `ale-breakout` at `maxTurns: 300` counted **163 of 300 decisions (54.3%) taken after lives reached 0**, with the engine's own `terminal` flag set. The ALE worker breaks out of its action-repeat loop once that flag holds, so none of those inputs reached the emulator: the decisions were inert, not merely unproductive. The episode still reported 300 of 300 answered and looked healthy.
+- **Why the consumer could not fix it.** `playEpisode` had two stop conditions, the turn limit and the dollar budget, and no terminal concept in the published API. The only other exit was an abort through `signal`, which throws inside the decision loop before `finalizeRecord` and destroys the attestation the grade is made of.
+- `Game<S>` gains an OPTIONAL `over(state): boolean`. A game that omits it is never over, so every existing adapter keeps its behaviour with no edit. It must be pure like `step`, because a verifier recomputes the final state from the seed and the input log and asks again. There is no shared spelling of the terminal flag across substrates — ALE writes `terminal`, Gymnasium `terminated` and `truncated`, stable-retro `episodeDone`, the 2048 core `gameOver` — so the mapping belongs to the adapter, not to a guess the harness makes over field names. `adapters/ale`, `adapters/gymnasium`, `adapters/stable-retro`, `adapters/native-2048`, and the `screen-puzzle` fixture implement it over evidence they already published.
+- `playEpisode`, `runCampaign`, and `executeBenchmark` take `stopAtGameOver`. **It is off by default**: episode length is the denominator a study divides by, and rounds compare only while every round played to the same turn limit. A default that shortened episodes would retroactively break a running comparison, so arming the stop is the caller's decision, taken once for a series.
+- The stop is an exit from the decision loop, never a thrown abort. `finalizeRecord` runs, and the record verifies by replay exactly as a turn-limited record does.
+- `EpisodeRecord` gains `stoppedBy` and `gameOver`, so a reader of an artifact never infers why a run ended. `stoppedBy` is `maxTurns`, `budget`, `gameOver`, or — for a campaign — `steering` or `analyst`. `gameOver` is `true`, `false`, or `null` when the game declares no terminal state at all. Game over outranks the limits: a run that reaches its last allowed turn and a finished game at the same instant reports `gameOver`.
+- The two fields together state which mode produced a record. `stoppedBy: 'maxTurns'` next to `gameOver: true` can only come from a run played past the end, so the stop was not armed. Where the game never ended, the two modes produce the same length and the same record.
+- `CampaignStop` gains `gameOver`, and a campaign segment records it. A campaign resumed from a ledger whose game already ended plays no further segment and writes no empty one. A ledger written by 0.6.0 still loads; the ledger schema is unchanged.
+
+### Measured
+
+ALE Breakout, ale-py 0.12.1, seed 0, `maxTurns: 300`, one scripted policy that opens four milestones and then loses every life. Both runs are gates in `pnpm test:ale`.
+
+| Run | Decisions | `stoppedBy` | `gameOver` | Milestones | Replay |
+|---|---|---|---|---|---|
+| turn limit (today's behaviour) | 300 | `maxTurns` | `true` | 4 of 6 | clean |
+| `stopAtGameOver: true` | 150 | `gameOver` | `true` | 4 of 6 | clean |
+
+The 150 dropped decisions are inert: every evidence channel — screen hash, save-state hash, and engine state — is byte-identical from decision 150 to decision 300, while decision 149 to 150 did move the emulator.
+
+Gymnasium FrozenLake-v1, same shape on a second real substrate: 6 decisions instead of 26, 3 of 3 milestones either way, replay clean. It is a gate in `pnpm test:gym`.
+
 ## 0.6.0
 
 ### A hash check identifies a state, not a trajectory

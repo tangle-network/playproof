@@ -298,6 +298,11 @@ export function makeAle(options: AleOptions): Ale {
       ? { text: s.frameText }
       : { text: s.frameText, images: [s.frameImage] }),
     evidence: (s) => s.evidence,
+    // The worker sets `terminal` when `ale.game_over()` first holds, and from
+    // that instant its step loop breaks out before it acts, so no further
+    // input reaches the emulator. Reading the flag the worker already
+    // publishes keeps one definition of the end of the game.
+    over: (s) => s.evidence.engineState?.terminal === 1,
   }
 
   try {
