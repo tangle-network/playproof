@@ -184,6 +184,9 @@ export function makeNative2048(seed = 0): Native2048Adapter {
     },
     frame: (state) => state.frameText,
     evidence: (state) => state.evidence,
+    // The core publishes `gameOver` when no move can change the board, which
+    // is exactly the end of a 2048 game.
+    over: (state) => state.evidence.engineState?.gameOver === 1,
   }
   const reference = [...NATIVE_2048_REFERENCE]
   const contract = deriveContract(game, seed, reference, marks())

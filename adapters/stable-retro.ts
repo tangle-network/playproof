@@ -287,6 +287,9 @@ export function makeStableRetro(options: StableRetroOptions): StableRetro {
       ? { text: s.frameText }
       : { text: s.frameText, images: [s.frameImage] }),
     evidence: (s) => s.evidence,
+    // The worker publishes `episodeDone` when the environment reported
+    // terminated or truncated, and stops acting from that point.
+    over: (s) => s.evidence.engineState?.episodeDone === 1,
   }
 
   try {

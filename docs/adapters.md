@@ -24,6 +24,30 @@ Read the mode column strictly.
 `trusted-recorder` means a named recorder signed what it captured and nothing was independently reproduced.
 `platform-attested` means a signed recorder read normalized progress from a platform API; it is not a signature from that platform.
 
+## Which adapters declare the end of play
+
+`Game.over(state)` is optional, and it is what an episode reads when the caller
+passes `stopAtGameOver`. A game that omits it is never over.
+
+| Adapter | `over(state)` reads |
+|---|---|
+| `adapters/ale` | `engineState.terminal`, set when `ale.game_over()` first holds |
+| `adapters/gymnasium` | `engineState.terminated` or `engineState.truncated` |
+| `adapters/stable-retro` | `engineState.episodeDone` |
+| `adapters/native-2048` | `engineState.gameOver`, set when no move changes the board |
+| `adapters/pyboy-generic`, `adapters/pyboy-tetris`, `adapters/retroarch` | Nothing; these workers publish no terminal flag, so the episode runs to a limit |
+| `platforms/steam`, `platforms/xbox` | Nothing; the title runs elsewhere |
+
+Each adapter maps its own substrate, because there is no shared spelling of the
+flag. It must be pure, like `step`: a verifier recomputes the final state from
+the seed and the input log and asks the same question.
+
+Every emulator worker here already stops acting once its own terminal flag is
+set, so the decisions an episode takes after that point change nothing at all.
+Measured on ALE Breakout at 300 turns: from the game-over decision onward the
+screen hash, the save-state hash, and the engine state are byte-identical to
+the end of the run.
+
 ## The observation image channel
 
 Every emulator adapter here was already capturing the screen for evidence and then showing the agent an ASCII downsample of it.

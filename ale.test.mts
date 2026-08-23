@@ -18,6 +18,7 @@ import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { attestRun } from './attestation'
 import { assertContractSeparates, assertOpaqueChecksDeclared, calibrateContract } from './calibration'
+import { playEpisode, scriptedDriver } from './episode'
 import { logFrom, observationOf } from './runtime'
 import { decodePng, unscale } from './test-png.mts'
 import { contractLegibility, formatMilestoneScore, scoreMilestones, validateContract } from './schema'
@@ -312,6 +313,59 @@ if (!pythonHasAle()) {
     } finally {
       vision.dispose()
     }
+
+    // The game-over stop, on the real emulator.
+    //
+    // Motivation, measured by a consumer at 300 turns on this ROM: 163 of 300
+    // decisions (54.3%) were taken after lives reached 0 with `terminal` set.
+    // The worker breaks out of its action-repeat loop once that flag holds, so
+    // none of those inputs reached the emulator.
+    //
+    // The script reproduces the shape deterministically — 40 inputs of the
+    // reference, which open four milestones, then FIRE until the last life is
+    // gone. A regression in these turn counts means ale-py, the ROM, or the
+    // reference moved.
+    const GAME_OVER_TURNS = 300
+    const REFERENCE_PREFIX = 40
+    const dying = () => scriptedDriver([
+      ...adapter.reference.slice(0, REFERENCE_PREFIX),
+      ...Array.from({ length: GAME_OVER_TURNS - REFERENCE_PREFIX }, () => 'FIRE'),
+    ])
+    const fullLength = await playEpisode(adapter.game, adapter.contract, dying(), 1, GAME_OVER_TURNS, adapter.seed)
+    const atGameOver = await playEpisode(
+      adapter.game, adapter.contract, dying(), 1, GAME_OVER_TURNS, adapter.seed, undefined, { stopAtGameOver: true },
+    )
+    assert.equal(fullLength.record.turns, GAME_OVER_TURNS)
+    assert.equal(fullLength.record.stoppedBy, 'maxTurns')
+    assert.equal(fullLength.record.gameOver, true, 'the full-length run ended past a finished game')
+    assert.equal(atGameOver.record.turns, 150)
+    assert.equal(atGameOver.record.stoppedBy, 'gameOver')
+    assert.equal(atGameOver.record.gameOver, true)
+    // The milestone verdict is unchanged: the 150 dropped decisions bought
+    // nothing, on either the score or the two pinned hashes.
+    assert.deepEqual(atGameOver.record.verified, fullLength.record.verified)
+    assert.deepEqual(atGameOver.record.score, fullLength.record.score)
+    assert.equal(atGameOver.record.verified.length > 0, true)
+    // The short record verifies by replay exactly as the full-length one does.
+    for (const run of [atGameOver, fullLength]) {
+      assert.equal(run.record.verdict, 'clean')
+      assert.equal(run.record.replayDivergence, false)
+      const recomputed = attestRun(adapter.game, adapter.contract, adapter.seed, run.log, [...run.record.verified])
+      assert.equal(recomputed.verdict, 'clean', recomputed.reasons.join('; '))
+      assert.deepEqual(recomputed.verified, run.record.verified)
+    }
+    // The dropped decisions were inert, not merely unproductive: every
+    // evidence channel is byte-identical from the game-over snapshot to the
+    // 300th, while the decision before it did move the emulator.
+    const dyingTrace = trace(adapter, [...fullLength.log.inputs()])
+    assert.equal(dyingTrace[atGameOver.record.turns], dyingTrace[GAME_OVER_TURNS])
+    assert.notEqual(dyingTrace[atGameOver.record.turns - 1], dyingTrace[atGameOver.record.turns])
+    console.log(
+      `ale: game-over stop — ${atGameOver.record.turns} of ${GAME_OVER_TURNS} decisions played, ` +
+      `${fullLength.record.turns - atGameOver.record.turns} dropped as inert ` +
+      `(${Math.round((1 - atGameOver.record.turns / GAME_OVER_TURNS) * 1000) / 10}% of the episode); ` +
+      `milestones ${formatMilestoneScore(atGameOver.record.score)}, unchanged from the full-length run`,
+    )
 
     // Teardown: dispose kills the worker and every later call fails loudly
     // instead of silently reading a dead transport.

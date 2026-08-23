@@ -10,13 +10,14 @@
  * This module is internal. It is not exported from `index.ts`.
  */
 import { attestRun, inputStatistics, MilestoneTracker } from './attestation'
-import { InputLog, observationOf, observationTextOf, type Game } from './runtime'
+import { InputLog, isGameOver, observationOf, observationTextOf, type Game } from './runtime'
 import type { MilestoneContract } from './schema'
 import type {
   AgentDecisionContext,
   AgentDriver,
   AgentHistoryEntry,
   EpisodeRecord,
+  EpisodeStop,
   MilestoneCostRow,
 } from './episode'
 
@@ -105,7 +106,7 @@ export function applyInput<S>(
   rollout.turns += 1
 }
 
-export type RolloutStop = 'segmentLimit' | 'maxTurns' | 'budget'
+export type RolloutStop = 'segmentLimit' | 'maxTurns' | 'budget' | 'gameOver'
 
 export interface RolloutLimits {
   budgetUsd: number
@@ -114,10 +115,18 @@ export interface RolloutLimits {
   maxDecisions?: number
   /** Latest supervisor or analyst note, passed to every decision in this call. */
   guidance?: string
+  /** Stop as soon as the game declares itself over. Off by default. */
+  stopAtGameOver?: boolean
   signal?: AbortSignal
 }
 
-/** Drive the agent until a limit stops it. Returns the limit that stopped it. */
+/**
+ * Drive the agent until a stop condition holds. Returns the one that held.
+ *
+ * Every stop is an ordinary exit from the loop, so the caller finalizes the
+ * rollout the same way whichever one fired. Nothing here throws to end a run:
+ * an exception would leave the caller without the record the run is graded on.
+ */
 export async function advanceRollout<S>(
   game: Game<S>,
   driver: AgentDriver,
@@ -126,7 +135,14 @@ export async function advanceRollout<S>(
   limits: RolloutLimits,
 ): Promise<RolloutStop> {
   let taken = 0
-  while (rollout.turns < limits.maxTurns && rollout.spent < limits.budgetUsd) {
+  // The conditions are asked in one place, before every decision, so game over
+  // is seen at the start of the run as well as after the last input. Order is
+  // precedence: a finished game outranks the harness limits, and both outrank
+  // a segment boundary, which only pauses a campaign.
+  while (true) {
+    if (limits.stopAtGameOver === true && isGameOver(game, rollout.state)) return 'gameOver'
+    if (rollout.turns >= limits.maxTurns) return 'maxTurns'
+    if (rollout.spent >= limits.budgetUsd) return 'budget'
     if (limits.maxDecisions !== undefined && taken >= limits.maxDecisions) return 'segmentLimit'
     limits.signal?.throwIfAborted()
     // One observation per decision. An over-cap image throws here, which fails
@@ -163,7 +179,6 @@ export async function advanceRollout<S>(
     applyInput(game, rollout, turn.input, turn.costUsd, latencyMs)
     taken += 1
   }
-  return rollout.turns >= limits.maxTurns ? 'maxTurns' : 'budget'
 }
 
 /** Attest the whole rollout and build the record both entrypoints return. */
@@ -174,6 +189,7 @@ export function finalizeRecord<S>(
   rollout: Rollout<S>,
   budgetUsd: number,
   startedAtMs: number,
+  stoppedBy: EpisodeStop,
 ): EpisodeRecord {
   const attestation = attestRun(game, contract, seed, rollout.log, [])
   return {
@@ -182,6 +198,11 @@ export function finalizeRecord<S>(
     spentUsd: round4(rollout.spent),
     budgetUsd,
     budgetExhausted: rollout.spent >= budgetUsd,
+    stoppedBy,
+    // Asked of every run, not only of a run that stopped for it: a turn-limited
+    // episode that reports `gameOver: true` is one that kept paying for
+    // decisions the game could no longer act on.
+    gameOver: game.over === undefined ? null : isGameOver(game, rollout.state),
     verified: attestation.verified,
     score: attestation.score,
     milestones: [...rollout.milestones],
