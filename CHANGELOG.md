@@ -2,7 +2,7 @@
 
 All notable changes to Playproof are documented here.
 
-## Unreleased
+## 0.8.0
 
 ### A milestone earned by dying is not evidence of skill
 
