@@ -20,8 +20,8 @@
  *
  * `saveBlobHash` is published here, and that is the opposite of what
  * `adapters/stable-retro` concluded on its own substrate. Measured on Breakout
- * with ale-py 0.12.1: over the 210-input reference, two separate worker
- * processes produced byte-identical `ALEState` serializations at all 211
+ * with ale-py 0.12.1: over the 839-input reference, two separate worker
+ * processes produced byte-identical `ALEState` serializations at all 840
  * snapshots, alongside identical screens, RAM, and counters. A verifier that
  * never shares the emulator can therefore recompute a save-file milestone.
  * Each substrate earns its tiers with its own measurement.

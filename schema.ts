@@ -236,9 +236,10 @@ export function formatMilestoneScore(score: MilestoneScore): string {
  * `attrition` — the run let a resource run down. Lives, health, shields, time
  * remaining. Such a milestone marks progress REACHED and never competence
  * shown, because the shortest path to it is to play badly. Measured on ALE
- * Breakout: the packaged `life-lost` milestone is `lives == 4`, so a program
- * that never dies cannot score it, and two hand-written controls that differ
- * only in how well they steer rank in the wrong order because of it.
+ * Breakout: a `life-lost` milestone is `lives == 4`, so a program that never
+ * dies cannot score it, and two hand-written controls that differ only in how
+ * well they steer ranked in the wrong order because of it. The packaged
+ * Breakout contract states no such milestone for that reason.
  *
  * Recording an attrition milestone is legitimate — "the reference got far
  * enough to lose a life" is a real fact about a trajectory. Scoring it as
@@ -340,8 +341,11 @@ export function scoreAchievements(
  * still demand exactly one event: if every other milestone requires the first,
  * a run that misses the first scores zero however well it played. That is one
  * bit of resolution wearing five milestones. Measured on the packaged
- * contracts: ALE Breakout gates 6 of 6 milestones behind `score-opened`, and
- * stable-retro Airstriker gates 5 of 5 behind its own `score-opened`.
+ * contracts: stable-retro Airstriker gates 5 of 5 milestones behind its
+ * `score-opened`. The packaged ALE Breakout contract gated 6 of 6 behind its
+ * own and now chains nothing: its checks read a counter that never falls, so a
+ * `requires` edge would restate the check and report a collapse that a
+ * seven-rung ladder does not have.
  *
  * This structure says nothing about how hard the prerequisite is. Whether a
  * trivial baseline earns it is a measurement, and `calibrateContract` reports
