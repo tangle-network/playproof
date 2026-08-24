@@ -21,6 +21,8 @@ import {
   assertContractSeparates,
   assertOpaqueChecksDeclared,
   calibrateContract,
+  measureProgressions,
+  PackagedContract,
   trivialBaselines,
   UNKNOWN_BASELINE_WORD,
 } from './calibration'
@@ -30,10 +32,11 @@ import {
   contractHash,
   contractLegibility,
   formatMilestoneScore,
+  scoreAchievements,
   scoreMilestones,
 } from './schema'
 import { makeNative2048, NATIVE_2048_INPUTS, NATIVE_2048_REFERENCE } from './adapters/native-2048'
-import { engineCrawlerContract } from './adapters/engine-crawler'
+import { engineCrawler, engineCrawlerContract, ENGINE_CRAWLER_REFERENCE } from './adapters/engine-crawler'
 import { saveLevels, saveLevelsContract, SAVE_LEVELS_REFERENCE } from './adapters/save-levels'
 import { screenPuzzle, screenPuzzleContract, SCREEN_PUZZLE_REFERENCE } from './adapters/screen-puzzle'
 
@@ -132,7 +135,7 @@ const mashContract = deriveContract(mashGame, 0, [...MASH_REFERENCE], [
   assert.deepEqual(report.trivial, ['moved'])
   assert.equal(report.bestBaselineCount, 1)
   assert.deepEqual(report.reference.verified, ['moved', 'lock-opened'])
-  assertContractSeparates(report)
+  assertContractSeparates(report, { gatedBehind: 'moved' })
 
   // (d) the counts are internally consistent.
   assert.equal(report.turns, LOCK_REFERENCE.length)
@@ -309,7 +312,7 @@ try {
   assert.equal(formatMilestoneScore(report.referenceScore), '2 of 2')
   assert.equal(report.bestBaselineLegibleCount, 1)
   assert.equal(report.separates, true)
-  assertContractSeparates(report)
+  assertContractSeparates(report, { gatedBehind: 'moved' })
   assertOpaqueChecksDeclared(report)
 }
 
@@ -388,14 +391,17 @@ const lockOpaqueContract = deriveContract(comboLock, 0, [...LOCK_REFERENCE], [
 
   // Declared, the same contract passes both gates. Nothing needs declaring as
   // weak, because the sweep found no other log that satisfies the hash.
-  assertContractSeparates(report, { opaqueChecks: ['frame-at-open'] })
+  assertContractSeparates(report, { opaqueChecks: ['frame-at-open'], gatedBehind: 'moved' })
   assertOpaqueChecksDeclared(report, { opaqueChecks: ['frame-at-open'] })
 
   // A declaration is an exact set. A missing id and a stale id both fail, so a
   // hash milestone added by a later derivation cannot hide behind it.
-  assert.throws(() => assertContractSeparates(report, { opaqueChecks: [] }), /1 undeclared opaque milestone\(s\)/u)
   assert.throws(
-    () => assertContractSeparates(report, { opaqueChecks: ['frame-at-open', 'lock-opened'] }),
+    () => assertContractSeparates(report, { opaqueChecks: [], gatedBehind: 'moved' }),
+    /1 undeclared opaque milestone\(s\)/u,
+  )
+  assert.throws(
+    () => assertContractSeparates(report, { opaqueChecks: ['frame-at-open', 'lock-opened'], gatedBehind: 'moved' }),
     /the contract does not state as a hash: lock-opened/u,
   )
 
@@ -677,6 +683,369 @@ const ledgeContract = deriveContract(ledgeWalk, 0, [...LEDGE_REFERENCE], [
         'a milestone gained a serialized field; every published contract hash would move')
     }
   }
+}
+
+// --- what a milestone says about the run that earned it ----------------------
+//
+// The pressure dive publishes three channels that move in three different
+// ways, and the classification never reads their names. `hull` only ever
+// cracks, so a milestone that needs it below its starting value is earned by
+// letting the resource run down. `lives` only ever rises — it counts rescued
+// divers — and it is named `lives` on purpose: a hardcoded list of resource
+// names would classify it backwards, which is the mistake `episode-terminal`
+// made one layer down when it matched the literal string `terminal` and
+// reported `observed: false` for every adapter that spells it otherwise.
+
+const DIVE_VOCABULARY = ['down', 'up', 'wait']
+const DIVE_REFERENCE = [
+  'wait', 'down', 'wait', 'down', 'wait', 'down',
+  'wait', 'down', 'wait', 'down', 'wait', 'down',
+]
+
+interface DiveState {
+  depth: number
+  hull: number
+  /** Rescued divers. Named `lives`, and it only goes UP. */
+  lives: number
+  equalized: number
+  steps: number
+}
+
+const descend = (s: DiveState, repairs: boolean, input: string): DiveState => {
+  const steps = s.steps + 1
+  if (input === 'wait') return { ...s, equalized: 1, steps }
+  if (repairs && input === 'up') return { ...s, hull: Math.min(s.hull + 1, 3), equalized: 0, steps }
+  if (input === 'down' && s.equalized === 1) {
+    const depth = s.depth + 1
+    return {
+      depth,
+      hull: depth >= 4 ? s.hull - 1 : s.hull,
+      lives: depth >= 2 ? s.lives + 1 : s.lives,
+      equalized: 0,
+      steps,
+    }
+  }
+  return { ...s, equalized: 0, steps }
+}
+
+const diveState = (): DiveState => ({ depth: 0, hull: 3, lives: 0, equalized: 0, steps: 0 })
+const diveEvidence = (s: DiveState) => ({
+  engineState: { depth: s.depth, hull: s.hull, lives: s.lives, steps: s.steps },
+})
+
+const pressureDive: Game<DiveState> = {
+  id: 'pressure-dive',
+  init: diveState,
+  step: (s, input) => descend(s, false, input),
+  frame: (s) => `depth ${s.depth} · hull ${s.hull} · rescued ${s.lives}`,
+  evidence: diveEvidence,
+}
+
+/**
+ * The same game and the same contract, with one input added: `up` patches the
+ * hull. Nothing about the contract, the field name, or the check changes — only
+ * what the channel is measured doing.
+ */
+const repairableDive: Game<DiveState> = {
+  id: 'pressure-dive',
+  init: diveState,
+  step: (s, input) => descend(s, true, input),
+  frame: pressureDive.frame,
+  evidence: diveEvidence,
+}
+
+const diveContract = deriveContract(pressureDive, 0, [...DIVE_REFERENCE], [
+  {
+    id: 'depth-4',
+    tier: 'engine-state',
+    glitchClass: 'legal',
+    when: (e) => (e.engineState?.depth ?? 0) >= 4,
+    sample: (e) => ({ kind: 'state-path', path: 'depth', op: '>=', value: e.engineState?.depth ?? 4 }),
+  },
+  {
+    id: 'lives-2',
+    tier: 'engine-state',
+    glitchClass: 'legal',
+    when: (e) => (e.engineState?.lives ?? 0) >= 2,
+    sample: (e) => ({ kind: 'state-path', path: 'lives', op: '>=', value: e.engineState?.lives ?? 2 }),
+  },
+  {
+    id: 'hull-cracked',
+    tier: 'engine-state',
+    glitchClass: 'legal',
+    when: (e) => (e.engineState?.hull ?? 3) < 3,
+    sample: (e) => ({ kind: 'state-path', path: 'hull', op: '==', value: e.engineState?.hull ?? 2 }),
+  },
+  {
+    id: 'depth-6',
+    tier: 'engine-state',
+    glitchClass: 'legal',
+    requires: ['depth-4'],
+    when: (e) => (e.engineState?.depth ?? 0) >= 6,
+    sample: (e) => ({ kind: 'state-path', path: 'depth', op: '>=', value: e.engineState?.depth ?? 6 }),
+  },
+  {
+    id: 'steps-after-crack',
+    tier: 'engine-state',
+    glitchClass: 'legal',
+    requires: ['hull-cracked'],
+    when: (e) => (e.engineState?.steps ?? 0) >= 8,
+    sample: (e) => ({ kind: 'state-path', path: 'steps', op: '>=', value: e.engineState?.steps ?? 8 }),
+  },
+])
+
+// (k) achievement and attrition, derived from measured motion.
+{
+  const report = calibrateContract(pressureDive, diveContract, {
+    reference: DIVE_REFERENCE,
+    vocabulary: DIVE_VOCABULARY,
+  })
+  const { progression } = report
+  assert.deepEqual(report.reference.verified, ['lives-2', 'depth-4', 'hull-cracked', 'steps-after-crack', 'depth-6'])
+  assert.deepEqual(progression.attrition, ['hull-cracked', 'steps-after-crack'])
+  assert.deepEqual(progression.achievement, ['depth-4', 'lives-2', 'depth-6'])
+  assert.deepEqual(progression.unmeasured, [])
+  assert.equal(progression.gameId, 'pressure-dive')
+
+  // The channel named `lives` rises, so it is an achievement. The channel named
+  // `hull` only falls, so it is attrition. Neither name was read.
+  assert.match(progression.reasons['lives-2'] ?? '', /reads engineState\.lives, which rose \d+ time\(s\)/u)
+  assert.match(
+    progression.reasons['hull-cracked'] ?? '',
+    /reads engineState\.hull, which fell \d+ time\(s\) and never rose .*"== 2" does not hold at its initial value 3/u,
+  )
+  // Attrition propagates through `requires`, because the tracker admits a
+  // milestone only after its prerequisites passed.
+  assert.equal(progression.reasons['steps-after-crack'], 'requires hull-cracked, which a resource running down earns')
+
+  // Every channel the measurement watched, with its motion.
+  const motion = Object.fromEntries(progression.motion.map((row) => [row.channel, row]))
+  assert.deepEqual(Object.keys(motion).sort(), ['engineState.depth', 'engineState.hull', 'engineState.lives', 'engineState.steps'])
+  assert.equal(motion['engineState.hull']?.rises, 0)
+  assert.ok((motion['engineState.hull']?.falls ?? 0) > 0)
+  assert.equal(motion['engineState.hull']?.initial, 3)
+  assert.equal(motion['engineState.lives']?.falls, 0)
+  assert.equal(motion['engineState.depth']?.falls, 0)
+
+  // An attrition milestone that no baseline reached is recorded, and it is not
+  // separation: "the reference lost hull and the baselines did not" says
+  // nothing about skill.
+  assert.deepEqual(report.separating, ['depth-4', 'depth-6'])
+  assert.deepEqual(report.attritionSeparating, ['hull-cracked', 'steps-after-crack'])
+  assert.equal(report.separates, true)
+  assert.deepEqual(report.referenceScore, { verified: 5, total: 5 })
+  assert.deepEqual(report.referenceAchievementScore, { verified: 3, total: 3 })
+
+  // The gate refuses until the author has read the finding and written the ids
+  // down, and the declaration is an exact set like every other one.
+  assert.throws(
+    () => assertContractSeparates(report),
+    (error: unknown) => {
+      const message = (error as Error).message
+      assert.match(message, /states 2 of 5 milestone\(s\) that a resource running down earns \(2 undeclared\)/u)
+      assert.match(message, /attrition: hull-cracked/u)
+      assert.match(message, /the reference scored 5 of 5 over the whole contract and 3 of 3 over its achievements alone/u)
+      assert.match(message, /hull-cracked, steps-after-crack separated the reference from every baseline/u)
+      assert.match(message, /attritionChecks: \['hull-cracked', 'steps-after-crack'\]/u)
+      assert.doesNotMatch(message, /does not separate/u)
+      return true
+    },
+  )
+  assert.throws(
+    () => assertContractSeparates(report, { attritionChecks: ['hull-cracked'] }),
+    /states 2 of 5 milestone\(s\) that a resource running down earns \(1 undeclared\)/u,
+  )
+  assert.throws(
+    () => assertContractSeparates(report, { attritionChecks: ['hull-cracked', 'steps-after-crack', 'depth-6'] }),
+    /attritionChecks names 1 milestone\(s\) the measurement did not classify as attrition: depth-6/u,
+  )
+  assertContractSeparates(report, { attritionChecks: ['hull-cracked', 'steps-after-crack'] })
+
+  // The mutation that must flip the classification: the same contract, the same
+  // milestone, the same field name, on a game where one input patches the hull.
+  // One trajectory that repairs is enough — which is why the split is measured
+  // over the reference AND every baseline, not over the reference alone.
+  const REPAIR = ['wait', 'down', 'wait', 'down', 'wait', 'down', 'wait', 'down', 'up', 'up', 'wait', 'down']
+  const never = measureProgressions(repairableDive, diveContract, { trajectories: [DIVE_REFERENCE] })
+  assert.deepEqual(never.attrition, ['hull-cracked', 'steps-after-crack'])
+  const repaired = measureProgressions(repairableDive, diveContract, { trajectories: [DIVE_REFERENCE, REPAIR] })
+  assert.deepEqual(repaired.attrition, [])
+  assert.deepEqual(repaired.achievement, ['depth-4', 'lives-2', 'hull-cracked', 'depth-6', 'steps-after-crack'])
+  assert.match(repaired.reasons['hull-cracked'] ?? '', /reads engineState\.hull, which rose 1 time\(s\)/u)
+
+  // A milestone no numeric channel speaks for is an achievement, and it says so.
+  const opaqueProfile = measureProgressions(comboLock, lockOpaqueContract, { trajectories: [LOCK_REFERENCE] })
+  assert.deepEqual(opaqueProfile.unmeasured, ['frame-at-open'])
+  assert.equal(
+    opaqueProfile.reasons['frame-at-open'],
+    'its frame-hash check reads no numeric channel, so no resource motion could be measured',
+  )
+
+  // The inversion this whole split exists to stop, in miniature. Run A got
+  // further and broke; run B played better and did not. The whole-contract
+  // score ranks A first; the achievement score ranks B first.
+  const brokeThrough = ['lives-2', 'hull-cracked', 'steps-after-crack']
+  const playedClean = ['depth-4', 'lives-2']
+  assert.deepEqual(scoreMilestones(diveContract, brokeThrough), { verified: 3, total: 5 })
+  assert.deepEqual(scoreMilestones(diveContract, playedClean), { verified: 2, total: 5 })
+  assert.deepEqual(scoreAchievements(diveContract, progression, brokeThrough), { verified: 1, total: 3 })
+  assert.deepEqual(scoreAchievements(diveContract, progression, playedClean), { verified: 2, total: 3 })
+
+  // A profile measured against another contract is refused rather than applied.
+  assert.throws(
+    () => scoreAchievements(lockContract, progression, ['moved']),
+    /progression profile is for "pressure-dive" but the contract is for "combo-lock"/u,
+  )
+  assert.throws(
+    () => scoreAchievements(diveContract, { ...progression, kinds: {} }, []),
+    /does not classify depth-4, lives-2, hull-cracked, depth-6, steps-after-crack/u,
+  )
+}
+
+// (l) a contract that resolves runs on one event.
+{
+  const report = calibrateContract(comboLock, lockContract, {
+    reference: LOCK_REFERENCE,
+    vocabulary: LOCK_VOCABULARY,
+  })
+  assert.deepEqual(report.collapse.prerequisite, 'moved')
+  assert.equal(report.collapse.gated, 2)
+  assert.equal(report.collapse.total, 2)
+  assert.deepEqual(report.collapse.gatedMilestones, ['moved', 'lock-opened'])
+  assert.equal(report.collapse.collapses, true)
+  assert.equal(report.collapse.earnedByReference, true)
+  assert.equal(report.collapse.earnedByBaseline.length, report.baselines.length)
+  assert.deepEqual(report.collapse.firstPassAt, { moved: 1, 'lock-opened': 8 })
+  assert.deepEqual(report.collapse.simultaneous, [])
+  assert.equal(report.collapse.simultaneousAfter, -1)
+
+  assert.throws(
+    () => assertContractSeparates(report),
+    (error: unknown) => {
+      const message = (error as Error).message
+      assert.match(message, /collapses to one event: 2 of 2 milestone\(s\) require moved/u)
+      assert.match(message, /gated by moved: lock-opened/u)
+      assert.match(message, /moved is earned by 9 of 9 trivial baseline\(s\)/u)
+      assert.match(message, /the whole contract opens for free/u)
+      assert.match(message, /gatedBehind: 'moved'/u)
+      return true
+    },
+  )
+  assert.throws(
+    () => assertContractSeparates(report, { gatedBehind: 'lock-opened' }),
+    /gatedBehind names lock-opened, which is not the milestone the contract hangs off \(moved gates 2 of 2\)/u,
+  )
+  assertContractSeparates(report, { gatedBehind: 'moved' })
+
+  // A prerequisite no baseline reaches collapses the other way: a run that
+  // misses it scores nothing, however well it played.
+  const dive = calibrateContract(pressureDive, diveContract, {
+    reference: DIVE_REFERENCE,
+    vocabulary: DIVE_VOCABULARY,
+    turns: 12,
+  })
+  // The dive contract has two independent roots, so it does not collapse.
+  assert.equal(dive.collapse.collapses, false)
+  assert.equal(dive.collapse.gated, 2)
+  assert.equal(dive.collapse.total, 5)
+
+  // The engine crawler states a milestone that requires nothing, so it is the
+  // shape a collapsed contract is measured against.
+  const crawler = calibrateContract(engineCrawler, engineCrawlerContract(), {
+    reference: ENGINE_CRAWLER_REFERENCE,
+    vocabulary: ['right', 'rest'],
+  })
+  assert.equal(crawler.collapse.prerequisite, 'room-1')
+  assert.equal(crawler.collapse.gated, 3)
+  assert.equal(crawler.collapse.total, 4)
+  assert.equal(crawler.collapse.collapses, false)
+
+  // Milestones that first pass at the same input are one event wearing two
+  // ids, and that is measured separately from `requires`.
+  const levels = calibrateContract(saveLevels, saveLevelsContract(), {
+    reference: SAVE_LEVELS_REFERENCE,
+    vocabulary: ['clear', 'grind'],
+  })
+  assert.deepEqual(levels.collapse.simultaneous, ['level-2-saved', 'level-2-logged'])
+  assert.equal(levels.collapse.simultaneousAfter, 3)
+  assert.deepEqual(levels.collapse.firstPassAt, { 'level-2-saved': 3, 'level-2-logged': 3 })
+}
+
+// (m) a packaged contract carries the calibration that justified it.
+{
+  const packaged = PackagedContract.calibrate(comboLock, lockContract, {
+    reference: LOCK_REFERENCE,
+    vocabulary: LOCK_VOCABULARY,
+    declare: { gatedBehind: 'moved' },
+  })
+  assert.equal(packaged.contract, lockContract)
+  assert.equal(packaged.hash, contractHash(lockContract))
+  assert.equal(packaged.report.separates, true)
+  assert.deepEqual(packaged.report.separating, ['lock-opened'])
+  assert.deepEqual(packaged.declaration, { gatedBehind: 'moved' })
+
+  // A contract that does not separate cannot be packaged by omission. This is
+  // the Airstriker failure: `separates: false`, an empty separating set, and a
+  // published target anyway, because running calibration was optional.
+  const mash = {
+    reference: MASH_REFERENCE,
+    vocabulary: MASH_VOCABULARY,
+  }
+  assert.throws(
+    () => PackagedContract.calibrate(mashGame, mashContract, mash),
+    (error: unknown) => {
+      const message = (error as Error).message
+      assert.match(message, /does not separate/u)
+      assert.match(message, /nonSeparating: '<why>'/u)
+      return true
+    },
+  )
+
+  // The escape hatch is explicit, and it is a reason rather than a switch.
+  const demo = PackagedContract.calibrate(mashGame, mashContract, {
+    ...mash,
+    declare: { nonSeparating: 'tier demonstration: this target exercises the engine-state path, it does not grade play' },
+  })
+  assert.equal(demo.report.separates, false)
+  assert.equal(demo.report.bestBaselineCount, 1)
+
+  assert.throws(
+    () => PackagedContract.calibrate(mashGame, mashContract, { ...mash, declare: { nonSeparating: '   ' } }),
+    /nonSeparating must state why this target is not meant to separate/u,
+  )
+
+  // And it is refused when it is stale, exactly as `opaqueChecks` is: a target
+  // that grew a real progression must not keep the excuse it shipped with.
+  assert.throws(
+    () => PackagedContract.calibrate(comboLock, lockContract, {
+      reference: LOCK_REFERENCE,
+      vocabulary: LOCK_VOCABULARY,
+      declare: { gatedBehind: 'moved', nonSeparating: 'demonstration only' },
+    }),
+    /nonSeparating says "demonstration only", but the contract separates: the reference reached lock-opened/u,
+  )
+
+  // Every other finding is refused here too, so packaging is the one gate an
+  // author cannot pass by calling a narrower one.
+  assert.throws(
+    () => PackagedContract.calibrate(comboLock, lockContract, { reference: LOCK_REFERENCE, vocabulary: LOCK_VOCABULARY }),
+    /collapses to one event/u,
+  )
+  assert.throws(
+    () => PackagedContract.calibrate(pressureDive, diveContract, {
+      reference: DIVE_REFERENCE,
+      vocabulary: DIVE_VOCABULARY,
+    }),
+    /that a resource running down earns/u,
+  )
+  assert.throws(
+    () => PackagedContract.calibrate(comboLock, lockOpaqueContract, {
+      reference: LOCK_REFERENCE,
+      vocabulary: LOCK_VOCABULARY,
+      declare: { gatedBehind: 'moved' },
+    }),
+    /states 1 of 3 milestone\(s\) as a hash/u,
+  )
 }
 
 console.log('playproof calibration: separating and non-separating contracts, legible/opaque split, opaque-collision sweep, policy determinism, edge cases OK')

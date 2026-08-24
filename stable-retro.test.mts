@@ -16,9 +16,10 @@ import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { attestRun } from './attestation'
+import { calibrateContract, PackagedContract } from './calibration'
 import { logFrom, observationOf } from './runtime'
 import { decodePng, unscale } from './test-png.mts'
-import { validateContract } from './schema'
+import { formatMilestoneScore, validateContract } from './schema'
 import { RetroRpc } from './adapters/retro-rpc'
 import { bundledReference, makeStableRetro, type RetroState, type StableRetro } from './adapters/stable-retro'
 
@@ -182,6 +183,84 @@ if (!pythonHasRetro()) {
     } finally {
       vision.dispose()
     }
+
+    // Calibration on the packaged Airstriker contract.
+    //
+    // Nothing in the path from `deriveContract` to a published target used to
+    // ask for this, and the answer is that the contract does not separate: the
+    // separating set is EMPTY. A seeded pseudo-random walk over the 25 advertised
+    // button words earns three of the four legible milestones, the same three
+    // the reference earns, and the fourth is a hash. Reporting it is the point:
+    // a contract that grades nothing must not look like one that grades play.
+    // The sweep is capped at 8 probed turns here. Genesis is the slowest
+    // substrate in the suite and this console advertises 25 input words, so a
+    // full 32-turn sweep costs 24,000 emulator steps for a number the first
+    // eight turns already establish.
+    const calibration = calibrateContract(adapter.game, adapter.contract, {
+      reference: adapter.reference,
+      vocabulary: adapter.inputs,
+      seed: adapter.seed,
+      collisionTurns: 8,
+    })
+    assert.deepEqual(calibration.reference.verified, adapter.contract.milestones.map((m) => m.id))
+    assert.deepEqual(calibration.separating, [])
+    assert.equal(calibration.separates, false)
+    assert.equal(calibration.bestBaselineAchievementCount, 3)
+    assert.deepEqual(calibration.trivial, ['score-opened', 'screen-active-at-first-score', 'score-tier-2'])
+
+    // `life-lost` is `lives == 2` from a start of 3: earned by dying, on a
+    // channel measured falling 18 times and never rising across 29 replayed
+    // trajectories. It is the one milestone no baseline reached, and before
+    // this split it was the contract's whole claim to discriminating power.
+    assert.deepEqual(calibration.progression.attrition, ['life-lost'])
+    assert.deepEqual(calibration.attritionSeparating, ['life-lost'])
+    assert.equal(calibration.progression.motion.find((row) => row.channel === 'engineState.lives')?.rises, 0)
+
+    // Every milestone requires `score-opened`, which two baselines earn, so the
+    // whole contract opens for free; and three of the five open at one instant.
+    assert.equal(calibration.collapse.prerequisite, 'score-opened')
+    assert.equal(calibration.collapse.gated, 5)
+    assert.equal(calibration.collapse.total, 5)
+    assert.equal(calibration.collapse.collapses, true)
+    assert.deepEqual(calibration.collapse.earnedByBaseline, ['round-robin', 'pseudo-random'])
+    assert.deepEqual(
+      calibration.collapse.simultaneous,
+      ['score-opened', 'frame-at-first-score', 'screen-active-at-first-score'],
+    )
+
+    // The hash is weak by a wide margin: a large family of logs reaches the
+    // state it names, measured rather than assumed.
+    const collision = calibration.collisions[0]!
+    assert.equal(collision.milestone, 'frame-at-first-score')
+    assert.ok(collision.collisions > 0, 'the sweep found no colliding log for the pinned frame')
+    assert.equal(collision.jointCollision, true)
+
+    // A packaged contract cannot be published without a verdict, and this one
+    // has no verdict to publish.
+    assert.throws(
+      () => PackagedContract.calibrate(adapter.game, adapter.contract, {
+        reference: adapter.reference,
+        vocabulary: adapter.inputs,
+        seed: adapter.seed,
+        collisionTurns: 8,
+        declare: {
+          opaqueChecks: ['frame-at-first-score'],
+          weakChecks: ['frame-at-first-score'],
+          attritionChecks: ['life-lost'],
+          gatedBehind: 'score-opened',
+        },
+      }),
+      /does not separate/u,
+    )
+    console.log(
+      `stable-retro: calibration — reference ${formatMilestoneScore(calibration.referenceScore)}, ` +
+      `achievements ${formatMilestoneScore(calibration.referenceAchievementScore)}, ` +
+      `best baseline ${calibration.bestBaselineCount} over ${calibration.turns} turns, ` +
+      `separating=${calibration.separating.join(',') || 'NOTHING'}, ` +
+      `attrition-only=${calibration.attritionSeparating.join(',') || 'nothing'}, ` +
+      `separates=${calibration.separates}, collapses=${calibration.collapse.collapses}, ` +
+      `${collision.collisions} of ${collision.substitutions} substitutions reproduce the pinned frame`,
+    )
 
     // Teardown: dispose kills the worker and every later call fails loudly
     // instead of silently reading a dead transport.

@@ -15,6 +15,7 @@ import { strict as assert } from 'node:assert'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { attestRun } from './attestation'
+import { calibrateContract, PackagedContract } from './calibration'
 import { playEpisode, scriptedDriver } from './episode'
 import { logFrom } from './runtime'
 import { validateContract } from './schema'
@@ -205,6 +206,73 @@ if (!pythonHasGymnasium()) {
     const lakeFirst = trace(lake, lake.reference)
     second = makeGymnasium({ envId: FROZENLAKE })
     assert.deepEqual(trace(second, lake.reference), lakeFirst, 'frozenlake cross-process replay diverged')
+
+    // Calibration on both packaged Gymnasium contracts.
+    //
+    // CartPole separates: a random walk drops the pole long before 50 steps.
+    // Neither contract carries an attrition milestone, which is the negative
+    // control for the split — a channel that only falls is a finding, and
+    // these environments publish none.
+    const pole = calibrateContract(cartpole.game, cartpole.contract, {
+      reference: cartpole.reference,
+      vocabulary: cartpole.inputs,
+      seed: cartpole.seed,
+    })
+    assert.equal(pole.separates, true)
+    assert.deepEqual(pole.separating, ['survived-50-steps', 'reward-at-50-steps'])
+    assert.deepEqual(pole.trivial, ['survived-25-steps', 'reward-at-25-steps'])
+    assert.deepEqual(pole.progression.attrition, [])
+    assert.deepEqual(pole.progression.unmeasured, ['frame-at-25-steps'])
+    assert.deepEqual(pole.referenceAchievementScore, { verified: 5, total: 5 })
+
+    // It still collapses: every milestone requires `survived-25-steps`, which
+    // two baselines reach, and three of the five open at that same step.
+    assert.equal(pole.collapse.prerequisite, 'survived-25-steps')
+    assert.equal(pole.collapse.gated, 5)
+    assert.equal(pole.collapse.collapses, true)
+    assert.deepEqual(pole.collapse.earnedByBaseline, ['round-robin', 'pseudo-random'])
+    assert.deepEqual(pole.collapse.simultaneous, ['survived-25-steps', 'reward-at-25-steps', 'frame-at-25-steps'])
+    assert.equal(pole.collapse.simultaneousAfter, 25)
+
+    const poleDeclared = {
+      opaqueChecks: ['frame-at-25-steps'],
+      gatedBehind: 'survived-25-steps',
+    }
+    assert.throws(() => PackagedContract.calibrate(cartpole.game, cartpole.contract, {
+      reference: cartpole.reference,
+      vocabulary: cartpole.inputs,
+      seed: cartpole.seed,
+    }), /collapses to one event/u)
+    const packagedPole = PackagedContract.calibrate(cartpole.game, cartpole.contract, {
+      reference: cartpole.reference,
+      vocabulary: cartpole.inputs,
+      seed: cartpole.seed,
+      declare: poleDeclared,
+    })
+    assert.equal(packagedPole.report.separates, true)
+
+    // FrozenLake is the sharpest packaged contract: no baseline reaches the
+    // goal at all, so its three milestones are all out of reach. All three
+    // also fire at the same instant, which is what a goal-only contract is.
+    const frozen = calibrateContract(frozenLake.game, frozenLake.contract, {
+      reference: frozenLake.reference,
+      vocabulary: frozenLake.inputs,
+      seed: frozenLake.seed,
+    })
+    assert.equal(frozen.separates, true)
+    assert.deepEqual(frozen.trivial, [])
+    assert.deepEqual(frozen.separating, ['reached-goal', 'goal-cell'])
+    assert.deepEqual(frozen.progression.attrition, [])
+    assert.equal(frozen.collapse.collapses, true)
+    assert.deepEqual(frozen.collapse.simultaneous, ['reached-goal', 'goal-frame', 'goal-cell'])
+    assert.deepEqual(frozen.collapse.earnedByBaseline, [])
+    console.log(
+      `gymnasium: calibration — ${CARTPOLE} separating=${pole.separating.join(',')} ` +
+      `(best baseline ${pole.bestBaselineAchievementCount} achievements, collapses=${pole.collapse.collapses}); ` +
+      `${FROZENLAKE} separating=${frozen.separating.join(',')} ` +
+      `(best baseline ${frozen.bestBaselineAchievementCount}, collapses=${frozen.collapse.collapses}); ` +
+      'no attrition milestone in either',
+    )
 
     // Unsupported action spaces fail at boot with a readable message.
     assert.throws(

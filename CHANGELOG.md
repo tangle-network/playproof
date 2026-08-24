@@ -2,6 +2,66 @@
 
 All notable changes to Playproof are documented here.
 
+## Unreleased
+
+### A milestone earned by dying is not evidence of skill
+
+- **The measurement.** ALE Breakout, ale-py 0.12.1, seed 0. Two deterministic controls with the same control law and the same deadzone in screen pixels, differing only in what they read: the ASCII frame at four screen pixels per character, or the `ram_ball_x`/`ram_paddle_x` channels at one pixel each. Neither carries state between decisions and neither costs a model call.
+
+  | control | game score @300 | @600 | lives left | milestones | achievements |
+  |---|---|---|---|---|---|
+  | `steer-from-ascii` | 6 | 7 | 0 (dead after 375) | **4 of 6** | 3 of 5 |
+  | `steer-from-ram` | **9** | **24** | **5** | 3 of 6 | 3 of 5 |
+
+  The RAM control wins every column the game itself reports and never dies. It scored one milestone LOWER, because the packaged `life-lost` milestone is `lives == 4`: a point for dying. A program that never dies capped at 3 of 6 at any horizon.
+- **`ProgressionKind` is `achievement` or `attrition`.** A milestone is attrition when a resource running down earns it. It marks progress REACHED and never competence shown, because the shortest path to it is to play badly. Recording it is legitimate; scoring it as competence is not.
+- **The split is measured, not declared, and it reads no field name.** `measureProgressions` watches every numeric channel the evidence publishes across the reference and every baseline, and calls a milestone attrition when three measured statements hold: its check reads a numeric channel; that channel never rose and fell at least once, over every snapshot of every trajectory; and the check does not hold at the initial value of that channel. Attrition propagates through `requires`, because `MilestoneTracker` admits a milestone only after its prerequisites passed.
+- A hardcoded `lives`/`health`/`shields` list would have failed the way a name match already failed one layer down: ALE spells its terminal flag `terminal`, Gymnasium `terminated`, stable-retro `episodeDone`. A fixture channel named `lives` that counts rescued divers only rises, and the measurement classifies it as the achievement it is.
+- A milestone no numeric channel speaks for — a hash, a log event, a path no trajectory published — is an achievement and is listed in `unmeasured`, so a reader sees where the measurement stopped. Attrition is a positive finding; the absence of one is not evidence of the opposite.
+- **`scoreAchievements(contract, profile, verified)`** drops attrition milestones from the numerator AND the denominator. `scoreMilestones` is unchanged and still answers how far a run got.
+- `CalibrationReport.separating` now counts legible **achievement** milestones, and `separates` compares the reference to the strongest baseline on those. Attrition milestones out of reach of every baseline move to `attritionSeparating`: they are recorded and never counted as separation. The report also carries `progression`, `referenceAchievementScore`, and `bestBaselineAchievementCount`.
+
+### A contract that grades on one event
+
+- `requires` is a partial order, so a contract can state six progressions and demand exactly one event. `report.collapse` states the structure with the number: which milestone the largest share requires, whether a trivial baseline reaches it, and how many milestones first pass at the SAME reference input.
+
+  | packaged contract | gated behind | of | prerequisite reached by a baseline | open at one instant |
+  |---|---|---|---|---|
+  | ALE Breakout | `score-opened` | 6 of 6 | no, 0 of 7 | 3 of 6, after 32 inputs |
+  | stable-retro Airstriker | `score-opened` | 5 of 5 | yes, 2 of 28 | 3 of 5, after 41 inputs |
+  | Gymnasium CartPole | `survived-25-steps` | 5 of 5 | yes, 2 of 6 | 3 of 5, after 25 steps |
+  | Gymnasium FrozenLake | `reached-goal` | 3 of 3 | no, 0 of 8 | 3 of 3, after 6 steps |
+  | native-2048 | `first-legal-move` | 7 of 7 | yes, 6 of 7 | 2 of 7, after 4 inputs |
+
+- A run that misses the prerequisite scores 0 of N however well it played; where a baseline reaches it, the whole contract opens for free and grades only what follows a free event. The gate refuses until the author declares the structure with `{ gatedBehind: 'score-opened' }`, and refuses a stale declaration the same way `opaqueChecks` does.
+
+### Calibration is no longer optional for a packaged contract
+
+- **The measurement.** `calibrateContract` on the packaged stable-retro Airstriker contract reports `separates: false` with an EMPTY separating set. A seeded pseudo-random walk over the 25 advertised button words earns three of the four legible milestones, the same three the reference earns; the fourth is a hash that 271 of 768 single-input substitutions of the reference reproduce. It shipped because nothing between `deriveContract` and a published target ever ran the gate.
+- **`PackagedContract.calibrate` is the only way to build a `PackagedContract`.** The class carries a private field and a private constructor, so an object literal of the same shape is not assignable and `new` is not available. It runs `calibrateContract`, refuses every finding the gate reports, and returns the contract with its hash, its report, and the declaration that let it through. A target that hands out a bare `MilestoneContract` has not been calibrated and now says so in its type.
+- `{ nonSeparating: '<why>' }` is the escape hatch for a target that is not meant to separate — a tier demonstration, a smoke fixture. It is a sentence rather than a switch, so the reason travels with the package, and it is REFUSED when the contract does separate: a declaration must not outlive the reason for it.
+- `assertContractSeparates` now reports the attrition and collapse findings alongside the opacity ones, so one run of the gate names everything an author must fix. `assertOpaqueChecksDeclared` is unchanged and still checks opacity alone.
+
+### Measured across every packaged contract
+
+Full calibration, seed as packaged, run on every target this machine can boot. `pnpm test:ale`, `pnpm test:retro`, and `pnpm test:gym` now carry these as gates; nothing but the fixtures ran calibration before.
+
+| contract | reference | achievements | best baseline | separating | attrition | verdict |
+|---|---|---|---|---|---|---|
+| ALE Breakout | 6 of 6 | 5 of 5 | 0 of 7 policies scored | `score-opened`, `score-tier-2`, `score-tier-4` | `life-lost` | separates, collapses, 1 undeclared attrition |
+| stable-retro Airstriker | 5 of 5 | 4 of 4 | 3 (pseudo-random) | **nothing** | `life-lost` | **does not separate**, collapses |
+| Gymnasium CartPole | 5 of 5 | 5 of 5 | 2 (round-robin, pseudo-random) | `survived-50-steps`, `reward-at-50-steps` | none | separates, collapses |
+| Gymnasium FrozenLake | 3 of 3 | 3 of 3 | 0 of 8 policies scored | `reached-goal`, `goal-cell` | none | separates, collapses |
+| native-2048 | 7 of 7 | 7 of 7 | 7 (pseudo-random) | **nothing** | none | **does not separate**, collapses |
+| save-levels | 2 of 2 | 2 of 2 | 2 (round-robin, pseudo-random) | **nothing** | none | **does not separate**, collapses |
+| screen-puzzle | 2 of 2 | 2 of 2 | 2 (constant:r) | **nothing** | none | **does not separate**, collapses |
+| engine-crawler | 4 of 4 | 4 of 4 | 4 (constant:right) | **nothing** | none | **does not separate**, does not collapse |
+
+- Breakout's `life-lost` and Airstriker's `life-lost` are the only two attrition milestones in the packaged set. Both were in `separating` before this change, so both contracts advertised a point for dying as part of their discriminating power.
+- The two Breakout controls tie at 3 of 5 achievements rather than separating, and the reason is the second finding: the contract's top achievement is `score >= 4`, so nothing in it tells 7 from 24.
+- `engineState.hpExact` in the `engine-crawler` fixture only ever falls, and its milestone is `hpExact == 1`, which HOLDS at the initial value. It is an achievement, which is the third condition of the rule doing its work: a check a run satisfies at turn zero needs no resource to run down.
+- Existing adapters are unchanged in behaviour. No adapter file was edited, every contract keeps its bytes and its hash, and the pinned hashes for `engine-crawler`, `save-levels`, and `screen-puzzle` still hold.
+
 ## 0.7.0
 
 ### An episode can end because the game ended
