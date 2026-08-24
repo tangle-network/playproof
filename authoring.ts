@@ -46,9 +46,15 @@ function checkHolds(check: MilestoneCheck, evidence: Evidence): boolean {
  * Blind-discovery marks are the sharp case, because nothing in the pipeline
  * ever asserts that a discovered channel means progress.
  *
+ * It also cannot know what a mark DEMONSTRATES. A mark on a life counter fires
+ * when the reference dies, and a contract that scores it rewards the run that
+ * played worse.
+ *
  * Run `calibrateContract` from calibration.ts on the derived contract and gate
- * publication with `assertContractSeparates`. A contract that no trivial policy
- * can satisfy is a benchmark; an uncalibrated one is a guess.
+ * publication with `PackagedContract.calibrate`, which refuses a contract that
+ * does not separate, an undeclared hash, an undeclared attrition milestone, and
+ * a contract every milestone of which requires one event. A contract that no
+ * trivial policy can satisfy is a benchmark; an uncalibrated one is a guess.
  */
 export function deriveContract<S>(
   game: Game<S>,

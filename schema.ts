@@ -226,3 +226,174 @@ export function scoreMilestones(contract: MilestoneContract, verified: readonly 
 export function formatMilestoneScore(score: MilestoneScore): string {
   return `${score.verified} of ${score.total}`
 }
+
+/**
+ * What a milestone says about the run that earned it.
+ *
+ * `achievement` — the run made something happen. A score threshold, a level
+ * reached, a state a player has to play towards.
+ *
+ * `attrition` — the run let a resource run down. Lives, health, shields, time
+ * remaining. Such a milestone marks progress REACHED and never competence
+ * shown, because the shortest path to it is to play badly. Measured on ALE
+ * Breakout: the packaged `life-lost` milestone is `lives == 4`, so a program
+ * that never dies cannot score it, and two hand-written controls that differ
+ * only in how well they steer rank in the wrong order because of it.
+ *
+ * Recording an attrition milestone is legitimate — "the reference got far
+ * enough to lose a life" is a real fact about a trajectory. Scoring it as
+ * competence is not, which is why `scoreAchievements` exists next to
+ * `scoreMilestones`.
+ */
+export type ProgressionKind = 'achievement' | 'attrition'
+
+/**
+ * How one numeric evidence channel moved across the measured trajectories.
+ *
+ * A channel is one key of one evidence map, named `engineState.lives` or
+ * `frameState.activeCells`. The counts are over every step of every measured
+ * trajectory, so `rises` 0 with `falls` above 0 is the measured statement
+ * "this channel is a resource that only runs down".
+ */
+export interface ChannelMotion {
+  /** `<map>.<key>`, for example `engineState.lives`. */
+  channel: string
+  /** Value at the initial state, or null when the trajectories disagreed. */
+  initial: number | null
+  /** Steps where the value was greater than the step before. */
+  rises: number
+  /** Steps where the value was less than the step before. */
+  falls: number
+  min: number
+  max: number
+  /** Trajectories that published the channel at least once. */
+  trajectories: number
+  /** Snapshots the counts are over. */
+  samples: number
+}
+
+/**
+ * Every milestone of one contract, split by what earning it demonstrates.
+ *
+ * The split is MEASURED, never declared in the contract, for the same reason
+ * legibility is derived: an existing contract keeps its bytes and its hash, and
+ * an author cannot forget to set it. `measureProgressions` in calibration.ts
+ * produces this from the motion of the channels the engine already publishes.
+ * Nothing here reads a field name, so an adapter that spells its life counter
+ * `shields` or `hull` is classified on the same evidence as one that spells it
+ * `lives`.
+ */
+export interface ProgressionProfile {
+  gameId: string
+  /** Every milestone of the contract, classified. */
+  kinds: Record<string, ProgressionKind>
+  /** Milestones that demonstrate something, in contract order. */
+  achievement: string[]
+  /** Milestones earned by a resource going down, in contract order. */
+  attrition: string[]
+  /**
+   * Milestones no numeric channel could speak for — a hash, a log event, or a
+   * path the measured trajectories never published. They count as achievements,
+   * because attrition is a positive finding and this is the absence of one.
+   * The list exists so a reader sees the limit of the measurement.
+   */
+  unmeasured: string[]
+  /** Why each milestone is classified as it is, keyed by milestone id. */
+  reasons: Record<string, string>
+  /** Every channel the measurement watched, in first-seen order. */
+  motion: ChannelMotion[]
+}
+
+function assertProfileMatches(contract: MilestoneContract, profile: ProgressionProfile): void {
+  if (profile.gameId !== contract.gameId) {
+    throw new Error(`progression profile is for "${profile.gameId}" but the contract is for "${contract.gameId}"`)
+  }
+  const missing = contract.milestones.filter((m) => profile.kinds[m.id] === undefined).map((m) => m.id)
+  if (missing.length > 0) {
+    throw new Error(`progression profile does not classify ${missing.join(', ')} — re-measure it against this contract`)
+  }
+}
+
+/**
+ * Score a run over the achievement milestones alone.
+ *
+ * Both the numerator and the denominator drop the attrition milestones, so two
+ * runs compared on this number are compared on what they made happen. A run
+ * that also lost a life is neither rewarded nor punished for it. Read
+ * `scoreMilestones` for the whole contract when the question is how far the run
+ * got rather than how well it played.
+ */
+export function scoreAchievements(
+  contract: MilestoneContract,
+  profile: ProgressionProfile,
+  verified: readonly string[],
+): MilestoneScore {
+  assertProfileMatches(contract, profile)
+  const achievement = new Set(contract.milestones.map((m) => m.id).filter((id) => profile.kinds[id] === 'achievement'))
+  return { verified: verified.filter((id) => achievement.has(id)).length, total: achievement.size }
+}
+
+/**
+ * How much of a contract hangs off one milestone.
+ *
+ * `requires` is a partial order, so a contract can state five progressions and
+ * still demand exactly one event: if every other milestone requires the first,
+ * a run that misses the first scores zero however well it played. That is one
+ * bit of resolution wearing five milestones. Measured on the packaged
+ * contracts: ALE Breakout gates 6 of 6 milestones behind `score-opened`, and
+ * stable-retro Airstriker gates 5 of 5 behind its own `score-opened`.
+ *
+ * This structure says nothing about how hard the prerequisite is. Whether a
+ * trivial baseline earns it is a measurement, and `calibrateContract` reports
+ * that as `collapse`.
+ */
+export interface ContractGate {
+  /** The milestone the largest share of the contract requires, transitively. */
+  prerequisite: string | null
+  /** Milestones that require it, transitively, counting the prerequisite itself. */
+  gated: number
+  /** Those milestone ids, in contract order. */
+  gatedMilestones: string[]
+  total: number
+}
+
+/**
+ * The milestone the largest share of a contract depends on.
+ *
+ * Ties are broken by contract order, so the answer is stable. A contract where
+ * no milestone requires another has no prerequisite and `gated` 0: nothing is
+ * chained, so nothing can collapse. A missing or cyclic requirement is not
+ * judged here — `validateContract` reports those, and the walk below stops on a
+ * cycle instead of looping.
+ */
+export function contractGate(contract: MilestoneContract): ContractGate {
+  const total = contract.milestones.length
+  const byId = new Map(contract.milestones.map((m) => [m.id, m]))
+  const closure = new Map<string, Set<string>>()
+  const requiredBy = (id: string, seen: Set<string>): Set<string> => {
+    const cached = closure.get(id)
+    if (cached !== undefined) return cached
+    if (seen.has(id)) return new Set()
+    seen.add(id)
+    const all = new Set<string>()
+    for (const required of byId.get(id)?.requires ?? []) {
+      if (!byId.has(required)) continue
+      all.add(required)
+      for (const deeper of requiredBy(required, seen)) all.add(deeper)
+    }
+    seen.delete(id)
+    closure.set(id, all)
+    return all
+  }
+
+  let best: ContractGate = { prerequisite: null, gated: 0, gatedMilestones: [], total }
+  for (const candidate of contract.milestones) {
+    const dependents = contract.milestones
+      .filter((m) => m.id === candidate.id || requiredBy(m.id, new Set()).has(candidate.id))
+      .map((m) => m.id)
+    if (dependents.length > best.gated && dependents.length > 1) {
+      best = { prerequisite: candidate.id, gated: dependents.length, gatedMilestones: dependents, total }
+    }
+  }
+  return best
+}
