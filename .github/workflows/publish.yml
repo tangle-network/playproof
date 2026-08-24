@@ -10,11 +10,65 @@ on:
         description: Existing v* tag to retry
         required: true
         type: string
+      ci_override_reason:
+        description: >-
+          Publish although ci is not green on the tagged commit. Say why, in at
+          least 12 characters. Leave this empty for an ordinary retry.
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
 
 jobs:
+  # A tag ships the commit it points at, so the release depends on what ci found
+  # on THAT commit. This job reads the ci result through the Actions API and
+  # refuses on every answer except a green one: no run, an unfinished run, a
+  # conclusion other than success, or a green run that never ran a required job.
+  # It runs beside `verify` and gates the one job that mutates anything.
+  require-green-ci:
+    runs-on: [self-hosted, ci-release]
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      actions: read
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+      # How long to wait for a ci run to appear, and how long to wait for one
+      # that is already running. The longest ci job allows 45 minutes.
+      CI_APPEAR_MINUTES: '10'
+      CI_WAIT_MINUTES: '60'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+      - name: Resolve the commit the tag points at
+        id: commit
+        run: |
+          git fetch --force --no-tags --depth=1 origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          sha=$(git rev-parse "$RELEASE_TAG^{}")
+          test "$(git rev-parse HEAD)" = "$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
+        with:
+          version: 11.17.0
+          dest: ${{ runner.temp }}/setup-pnpm
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
+      - name: Install exact dependencies
+        run: pnpm install --frozen-lockfile
+      # The job token reads the Actions API; no pool credential is involved. An
+      # override is possible only through workflow_dispatch and only with a
+      # written reason, so a tag push can never take that path.
+      - name: Refuse a tag whose commit ci has not passed
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ steps.commit.outputs.sha }}
+          CI_OVERRIDE_REASON: ${{ github.event_name == 'workflow_dispatch' && inputs.ci_override_reason || '' }}
+        run: pnpm exec tsx release-gate.mts
+
   verify:
     runs-on: [self-hosted, ci-release]
     timeout-minutes: 25
@@ -89,7 +143,7 @@ jobs:
           retention-days: 7
 
   publish-npm:
-    needs: verify
+    needs: [require-green-ci, verify]
     runs-on: [self-hosted, ci-release]
     timeout-minutes: 10
     permissions:
