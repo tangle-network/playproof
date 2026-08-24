@@ -22,9 +22,9 @@ Protocol methods:
   restore    {state}
   shutdown   {}
 
-Determinism, measured on Breakout with ale-py 0.12.1 over the 210-input
+Determinism, measured on Breakout with ale-py 0.12.1 over the 839-input
 reference: the rendered screen, the RAM, the emulator counters, and the
-serialized `ALEState` are byte-identical at all 211 snapshots of two separate
+serialized `ALEState` are byte-identical at all 840 snapshots of two separate
 worker processes. Unlike the libretro save state behind `adapters/stable-retro`,
 the ALE state blob IS reproducible across processes, so this worker publishes
 `saveBlobHash` and a contract may pin it.

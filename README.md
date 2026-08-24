@@ -170,12 +170,12 @@ Aborting through `signal` is a different thing: it throws inside the loop, befor
 
 ### Measured
 
-ALE Breakout, ale-py 0.12.1, seed 0, 300 turns, one scripted policy that opens four milestones and then loses every life:
+ALE Breakout, ale-py 0.12.1, seed 0, 300 turns, one scripted policy that opens the first rung of the ladder and then loses every life:
 
 | Run | Decisions | `stoppedBy` | `gameOver` | Milestones |
 |---|---|---|---|---|
-| turn limit | 300 | `maxTurns` | `true` | 4 of 6 |
-| game-over stop | 150 | `gameOver` | `true` | 4 of 6 |
+| turn limit | 300 | `maxTurns` | `true` | 1 of 7 |
+| game-over stop | 150 | `gameOver` | `true` | 1 of 7 |
 
 The 150 dropped decisions are inert, not merely unproductive.
 The ALE worker breaks out of its action-repeat loop once the game is over, so every evidence channel is byte-identical from decision 150 to decision 300.
@@ -210,7 +210,7 @@ The emulator adapters were already capturing the screen.
 `ale/worker.py` calls `getScreenRGB()`, hashes those pixels into `frameHash` for verification, and used to throw the picture away; the agent received a luminance-to-ASCII downsample of it.
 That is a perception limit the harness created, not a result about the agent.
 
-Measured on ALE Breakout: `stealth/ox-alpha`, a `text+image->text` model, and `liquid/lfm-2.5-2.6b:free` both scored 0 of 6 milestones, and their own transcripts show them reading the ASCII as a maze — "exploring the map", "positioned near the goal area" — rather than a paddle-and-ball game.
+Measured on ALE Breakout, against the six-milestone contract of the time: `stealth/ox-alpha`, a `text+image->text` model, and `liquid/lfm-2.5-2.6b:free` both scored 0 of 6 milestones, and their own transcripts show them reading the ASCII as a maze — "exploring the map", "positioned near the goal area" — rather than a paddle-and-ball game.
 One of them pressed `FIRE` twice in 45 turns, so no ball was ever in play.
 
 ### Bounds
@@ -347,12 +347,15 @@ Legibility is derived from the check kind, so no contract changes and no author 
 import { contractLegibility, formatMilestoneScore } from '@tangle-network/playproof'
 
 contractLegibility(contract)
-// { legible: ['score-opened', 'score-tier-2', 'score-tier-4', 'life-lost'],
+// { legible: ['score-opened', 'life-lost'],
 //   opaque: ['frame-at-first-score', 'save-at-first-score'],
 //   reasons: { 'frame-at-first-score': 'its frame-hash check states its requirement as a hash, …' } }
 
-formatMilestoneScore(record.score) // '3 of 6'
+formatMilestoneScore(record.score) // '3 of 4'
 ```
+
+The contract above is the demonstration contract in `ale.test.mts`, not the packaged Breakout one.
+The packaged contract states no hash at all, for the measured reason two sections below.
 
 Every milestone is a point, hashes included, so the denominator of a score is the contract's milestone count.
 `Attestation` and `EpisodeRecord` carry `verified` and `score`; a campaign segment report carries `scoreSoFar`.
@@ -410,14 +413,17 @@ A hash milestone that a later derivation adds therefore cannot enter a published
 `calibrateContract` also runs `probeOpaqueCollisions`: it replaces one input of the reference at a time, over the prefix that ends where an opaque check first passes, and counts the perturbed logs that still satisfy it.
 A hash a large family of logs satisfies is a weak check, and `weakChecks` is where an author accepts the measured number by id.
 
-Measured on ALE Breakout, whose two hashes fire after 32 inputs over `NOOP/FIRE/RIGHT/LEFT`:
+Measured on a Breakout contract that pins the screen and the save state at the first point scored, whose two hashes fire after 32 inputs over `NOOP/FIRE/RIGHT/LEFT`:
 
 | Measurement | Value |
 |---|---|
 | single-input substitutions of the 32-turn prefix | 96 |
-| substitutions that still reproduce both hashes | 40, at 16 of the 32 turns |
-| all 16 applied at once | still reproduces both |
-| distinct 32-input logs that satisfy the hashes | at least 3.82 × 10⁸ |
+| substitutions that still reproduce both hashes | 56, at 21 of the 32 turns |
+| all 21 applied at once | does not reproduce them |
+| distinct 32-input logs that satisfy the hashes | at least 5.22 × 10¹¹ |
+
+The packaged Breakout contract therefore states no hash.
+Half a trillion logs stand in that state, and no independent control in `ale.test.mts` has ever landed on it: the two points were a denominator only the reference could score against.
 
 `FIRE` while the ball is already in flight is a state no-op, so those logs reach a bit-identical emulator state.
 
@@ -448,17 +454,22 @@ scoreMilestones(contract, verified)               // how far the run got
 scoreAchievements(contract, profile, verified)    // how well it played
 ```
 
-Measured on ALE Breakout, ale-py 0.12.1, seed 0. Two deterministic controls with the same control law and the same deadzone in screen pixels, differing only in what they read:
+Measured on ALE Breakout, ale-py 0.12.1, seed 0. Three deterministic controls, none of which costs a model call. Two share a control law and a deadzone in screen pixels and differ only in what they read; the third reads nothing and repeats a fixed three-word cycle, and it is the strongest screen-blind program a sweep of all 340 input patterns of period four or less found:
 
-| control | reads | game score @300 | @600 | lives left | milestones | achievements |
+| control | reads | game score @300 | @600 | lives left | achievements @300 | @600 |
 |---|---|---|---|---|---|---|
-| `steer-from-ascii` | the ASCII frame, 4 px per character | 6 | 7 | 0 | **4 of 6** | 3 of 5 |
-| `steer-from-ram` | `ram_ball_x`, `ram_paddle_x` | **9** | **24** | **5** | 3 of 6 | 3 of 5 |
+| `screen-blind` | nothing | 7 | 7 | 0 | 3 of 7 | 3 of 7 |
+| `steer-from-ascii` | the ASCII frame, 4 px per character | 6 | 7 | 0 | 3 of 7 | 3 of 7 |
+| `steer-from-ram` | `ram_ball_x`, `ram_paddle_x` | **9** | **24** | **5** | **4 of 7** | **5 of 7** |
 
-The RAM control wins every column the game reports and never dies.
-Under the whole contract it scored LOWER, because `life-lost` is `lives == 4`: a point for dying.
+The RAM control wins every column the game reports and never dies, and the contract now says so at both budgets.
+It did not always. Against a six-milestone contract whose top achievement was `score >= 4`, all three controls tied at 3 of 5 achievements, and the whole-contract score put the ASCII control FIRST at 4 of 6, because `life-lost` is `lives == 4`: a point for dying.
 `separating` and `separates` therefore count legible **achievement** milestones only, and `attritionSeparating` records the rest.
 Declare an attrition milestone to keep it: `assertContractSeparates(report, { attritionChecks: ['life-lost'] })`.
+
+Excluding a point for dying was necessary and it was not sufficient.
+A contract whose top rung is `score >= 4` cannot tell 7 from 24 however it scores, so the packaged Breakout ladder now doubles — `score >= 1, 2, 4, 8, 18, 32, 64` — over a reference that reaches 64.
+The strongest control reaches 5 of those 7, so the ladder still has rungs above the best program anyone has written for it.
 
 ### A contract that grades on one event
 
@@ -467,13 +478,15 @@ Declare an attrition milestone to keep it: `assertContractSeparates(report, { at
 
 | contract | gated behind | of | prerequisite reached by a baseline | open at one instant |
 |---|---|---|---|---|
-| ALE Breakout | `score-opened` | 6 of 6 | no | 3 of 6, after 32 inputs |
 | stable-retro Airstriker | `score-opened` | 5 of 5 | yes: `round-robin`, `pseudo-random` | 3 of 5, after 41 inputs |
 | Gymnasium CartPole | `survived-25-steps` | 5 of 5 | yes: `round-robin`, `pseudo-random` | 3 of 5, after 25 steps |
 | Gymnasium FrozenLake | `reached-goal` | 3 of 3 | no | 3 of 3, after 6 steps |
 
 A run that misses the prerequisite scores zero however well it played; where a baseline reaches it, the whole contract opens for free.
 The gate refuses until the author declares the structure with `{ gatedBehind: 'score-opened' }`.
+
+ALE Breakout used to head that table at 6 of 6, gated behind `score-opened`, with three milestones opening at input 32.
+Its seven rungs now chain nothing and open at seven distinct inputs: `engineState.score` never falls, so `score >= 18` cannot pass before `score >= 8` and a `requires` edge would only restate the check.
 
 ### A packaged contract carries the calibration that justified it
 
@@ -496,6 +509,9 @@ const packaged = PackagedContract.calibrate(game, contract, {
 packaged.report.separates   // the verdict travels with the contract
 ```
 
+A contract with nothing to declare passes with no `declare` at all.
+The packaged ALE Breakout contract is calibrated that way in `ale.test.mts`: seven legible achievement rungs, no hash, no attrition milestone, and no prerequisite the whole contract hangs off.
+
 A target that is not meant to separate — a tier demonstration, a smoke fixture — says so in words, and the declaration is refused when it goes stale:
 
 ```ts
@@ -510,7 +526,7 @@ No trivial baseline reproduces either hash, which is exactly why the baseline su
 
 | Contract | Milestones | Legible | Reference score | Best trivial baseline |
 |---|---|---|---|---|
-| ALE Breakout | 6 | 4 | 6 of 6 | 0 legible |
+| ALE Breakout | 7 | 7 | 7 of 7 | 0 legible |
 | Libbet through `pyboy-generic` | 6 | 4 | 3 of 6 | 3 legible |
 
 Breakout separates on its legible milestones.
@@ -614,9 +630,9 @@ The [Arcade Learning Environment](https://github.com/Farama-Foundation/Arcade-Le
 - **Inputs.** The game's minimal action set, as ALE `Action` names: `NOOP`, `FIRE`, `UP`, `RIGHT`, `LEFT`, `DOWN`, `UPRIGHT`, and the rest. Unknown words are no-ops. Each input is held for `frames` emulator frames, four by default.
 - **Observation.** An ASCII downsample of the screen plus a one-line score, lives, and frame summary. `screenImage: true` adds the rendered screen as a PNG, with `screenScale` repeating whole pixels; at 3x a Breakout frame encodes to about 2.4 KB.
 - **Evidence.** Cumulative score, lives, the emulator frame counters, and the RAM bytes the caller names as `channels`. The 128-byte RAM page is never published whole. Joined by the rendered-frame hash and the serialized emulator-state hash.
-- **Verification.** `replay`. Screens, RAM, counters, and the serialized `ALEState` were measured byte-identical across separate worker processes at all 211 snapshots of the Breakout reference, so a save-file milestone is honest here even though the same tier is not honest on stable-retro. See [Execution adapters](docs/adapters.md) for the numbers.
+- **Verification.** `replay`. Screens, RAM, counters, and the serialized `ALEState` were measured byte-identical across separate worker processes at all 840 snapshots of the Breakout reference, so a save-file milestone is honest here even though the same tier is not honest on stable-retro. See [Execution adapters](docs/adapters.md) for the numbers.
 
-`ale-py` bundles the Atari ROM set, so the adapter and its test run on a clean CI machine with no download and no secret. The bundled reference plays Breakout; supply a reference playthrough through `options.reference` for any of the other ROMs.
+`ale-py` bundles the Atari ROM set, so the adapter and its test run on a clean CI machine with no download and no secret. The bundled reference plays Breakout to a score of 64 over 839 inputs, and its contract is seven rungs of one progression: `score >= 1, 2, 4, 8, 18, 32, 64`. Supply a reference playthrough through `options.reference` for any of the other ROMs.
 
 ### Any Gymnasium environment
 

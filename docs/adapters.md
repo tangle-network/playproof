@@ -83,7 +83,7 @@ Its environments here observe a vector or an `ansi` string rather than a framebu
 That is a new dependency for a picture of a cart and a pole, so the adapter does without and says so.
 
 Each gate proves the identity rather than the plumbing: it undoes the whole-pixel upscale, hashes the recovered native buffer, and asserts it equals the `frameHash` a verifier recomputes.
-Measured on CI hardware — ALE Breakout at 3x: a 480x630 PNG of 2,450 bytes with 9 distinct colours; stable-retro Airstriker at 2x: 640x448, 1,968 bytes, 9 colours; PyBoy Libbet at 3x: 480x432, 1,228 bytes, 1 colour, because Libbet under the blind generic preamble draws an all-white screen from about the fortieth reference input onward.
+Measured on CI hardware — ALE Breakout at 3x: a 480x630 PNG of 2,488 bytes with 9 distinct colours; stable-retro Airstriker at 2x: 640x448, 1,968 bytes, 9 colours; PyBoy Libbet at 3x: 480x432, 1,228 bytes, 1 colour, because Libbet under the blind generic preamble draws an all-white screen from about the fortieth reference input onward.
 
 **The pixels are observation, never evidence.**
 They do not enter the input log, the contract, or the attestation, and an adapter that put privileged state into an image caption would be breaking the same boundary that already forbids putting it into the frame text.
@@ -104,9 +104,9 @@ For stable-retro this was measured, not assumed, and the result shaped the adapt
 
 ALE was measured the same way and gives the opposite answer:
 
-- Screens, RAM, emulator counters, and the serialized `ALEState` are byte-identical across separate worker processes at all 211 snapshots of the Breakout reference, on ale-py 0.12.1.
+- Screens, RAM, emulator counters, and the serialized `ALEState` are byte-identical across separate worker processes at all 840 snapshots of the Breakout reference, on ale-py 0.12.1.
 - The state blob is 7,705 bytes and the same length at every snapshot.
-- The adapter therefore publishes `saveBlobHash`, and the bundled contract pins a save-file milestone that a verifier can recompute.
+- The adapter therefore publishes `saveBlobHash`, and a save-file milestone derived against it is one a verifier can recompute. The bundled Breakout contract states none, for the separate reason below: a hash names a state a great many logs reach.
 
 The PyBoy adapter reaches the same conclusion as ALE on its own substrate and does publish a save-state hash.
 No answer generalizes. A new replay adapter measures its own substrate before it declares a tier.
@@ -160,7 +160,7 @@ Every milestone is a point, so the **Milestones** column is the denominator of a
 
 | Contract | Milestones | Legible | Opaque |
 |---|---|---|---|
-| ALE Breakout | 6 | 4 | 2 — `frame-at-first-score`, `save-at-first-score` |
+| ALE Breakout | 7 | 7 | 0 |
 | Libbet through `pyboy-generic` | 6 | 4 | 2 — `state-at-first-progression`, `frame-at-first-progression` |
 | PyBoy Tetris | 5 | 3 | 2 — `game-started`, `state-at-line-1` |
 | stable-retro Airstriker | 5 | 4 | 1 — `frame-at-first-score` |
@@ -187,7 +187,8 @@ assertContractSeparates(report, {
 ```
 
 `report.collisions` carries the measured strength of each opaque check: how many single-input substitutions of the reference still satisfy it, at how many turns, and a lower bound on the family of logs that do.
-On Breakout that bound is 3.82 × 10⁸ distinct 32-input logs, so the two hashes name a state a great many trajectories reach.
+Measured on a Breakout contract that pins the screen and save state at the first point scored: 56 of 96 substitutions still satisfy both hashes, and the bound is 5.22 × 10¹¹ distinct 32-input logs.
+That number is why the packaged Breakout contract states no hash: no independent control in `ale.test.mts` has ever earned one, and a point only the reference can score is a point that grades nothing.
 
 ## Libretro consoles through stable-retro
 
@@ -274,9 +275,11 @@ The gate in `ale.test.mts` decodes the produced PNG, checks the dimensions and t
 **Contracts.** A reference file declares the trigger for each milestone.
 `deriveContract` replays the reference and samples the value or hash that actually held at that instant.
 No threshold or hash is written by hand.
+The bundled Breakout contract is seven rungs of one progression — `score >= 1, 2, 4, 8, 18, 32, 64` — so a run that broke 24 bricks and one that broke 64 do not score the same.
 
 **ROMs.** `ale-py` bundles the Atari ROM set, so this adapter needs no download and no secret.
-The bundled reference plays Breakout and reaches a score of 5 over 210 inputs, which opens milestones on all three evidence tiers.
+The bundled reference plays Breakout and reaches a score of 64 over 839 inputs, which opens all seven rungs of the packaged ladder.
+It was recorded once from a predictive paddle controller reading the RAM channels the reference declares.
 Supply a reference playthrough through `options.reference` for any other ROM.
 
 ## Any Gymnasium environment

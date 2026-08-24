@@ -4,6 +4,26 @@ All notable changes to Playproof are documented here.
 
 ## 0.8.0
 
+### The Breakout contract now measures how well a run played, not that it played
+
+- **The defect.** The packaged ALE Breakout contract was derived from a reference that reached score 5 over 210 inputs, so its top achievement was `score >= 4`. Nothing in it could tell 7 points from 24. Excluding the point for dying stopped it ranking the worse player first; it did not give it any resolution above the bottom of the range.
+
+  | control @600 decisions, seed 0 | game score | lives left | achievements, before | after |
+  |---|---|---|---|---|
+  | `screen-blind`, a fixed 3-word cycle | 7 | 0 | 3 of 5 | 3 of 7 |
+  | `steer-from-ascii` | 7 | 0 | 3 of 5 | 3 of 7 |
+  | `steer-from-ram` | **24** | **5** | 3 of 5 | **5 of 7** |
+
+  Every program that played at all saturated the same three achievements. Under the new ladder the RAM control ranks strictly first at 300 decisions (4 of 7 against 3 of 7) and at 600, and two rungs are still open above it.
+- **A new reference, recorded once at seed 0.** A predictive paddle controller reading the RAM ball and paddle channels: it estimates the ball velocity from the previous decision, reflects the predicted path off the side walls, and steers to the crossing point. It reaches score 64 over 839 inputs. The script ends at the input that opened the last rung.
+- **The ladder doubles.** The reference declares trigger points 1, 2, 4, 8, 16, 32, 64 and `deriveContract` samples the score that actually held at each, so the packaged checks are `score >= 1, 2, 4, 8, 18, 32, 64`. The fifth trigger is written as 18 because the reference's score steps 14 to 18 when it clears a four-point row, and a trigger inside that step would derive a check that disagrees with its own name.
+- **All seven trivial baselines still score zero**, at 210, 300, 450, 600, 900 and 1,200 inputs. `PackagedContract.calibrate` passes with no declaration at all: nothing to accept as opaque, nothing to record as attrition, nothing the whole contract hangs off.
+- **The contract states no hash.** `frame-at-first-score` and `save-at-first-score` pinned the screen and the save state at the first point scored. Measured by the substitution sweep: 56 of 96 single-input substitutions of the 32-input prefix still satisfy them, at 21 of 32 turns, for at least 5.22 × 10¹¹ distinct 32-input logs. No independent control has ever landed on that state, so the two points were denominator only the reference could score against.
+- **The contract states no `life-lost` milestone.** It is `lives == 4`, earned by dying, and the achievement split below already excluded it from the achievement score. Removing it makes the whole-contract score equal the achievement score, so no consumer can pick the number that ranks a control that died above one that did not.
+- **No rung requires another.** `engineState.score` rises and never falls, measured over the reference and every baseline, so `score >= 18` cannot pass before `score >= 8` and a `requires` edge would restate the check while reporting a collapse a seven-rung ladder does not have. `report.collapse.collapses` is now `false` for this target, and its seven rungs first pass at seven distinct inputs (32, 71, 137, 259, 404, 636, 839).
+- **`ale.test.mts` keeps a demonstration contract** derived from the same reference, with the two hash tiers, a `requires` chain and `life-lost`. The screen-frame and save-file evidence tiers, the opaque-collision sweep, the attrition classifier and the collapse gate stay under test on the real emulator; they are simply no longer things a Breakout player is graded on. `screen-blind` joins the two steering controls as a permanent gate, and the test now asserts the strongest control does NOT reach the top rung.
+- **What a consumer must do.** The packaged reference file, the derived contract and its hash all change. A stored `Attestation` or `EpisodeRecord` against the old contract does not verify against the new one, and a milestone id from it (`score-opened`, `score-tier-2`, `score-tier-4`, `life-lost`, `frame-at-first-score`, `save-at-first-score`) no longer exists. Pass the previous reference through `makeAle({ game: 'breakout', reference })` to keep the old contract. No adapter behaviour changed: the worker, the evidence keys, the observation, the input vocabulary and the seed handling are untouched.
+
 ### A milestone earned by dying is not evidence of skill
 
 - **The measurement.** ALE Breakout, ale-py 0.12.1, seed 0. Two deterministic controls with the same control law and the same deadzone in screen pixels, differing only in what they read: the ASCII frame at four screen pixels per character, or the `ram_ball_x`/`ram_paddle_x` channels at one pixel each. Neither carries state between decisions and neither costs a model call.
@@ -13,7 +33,7 @@ All notable changes to Playproof are documented here.
   | `steer-from-ascii` | 6 | 7 | 0 (dead after 375) | **4 of 6** | 3 of 5 |
   | `steer-from-ram` | **9** | **24** | **5** | 3 of 6 | 3 of 5 |
 
-  The RAM control wins every column the game itself reports and never dies. It scored one milestone LOWER, because the packaged `life-lost` milestone is `lives == 4`: a point for dying. A program that never dies capped at 3 of 6 at any horizon.
+  The RAM control wins every column the game itself reports and never dies. It scored one milestone LOWER, because the packaged `life-lost` milestone is `lives == 4`: a point for dying. A program that never dies capped at 3 of 6 at any horizon. Those counts are against the six-milestone contract that the section above then replaced.
 - **`ProgressionKind` is `achievement` or `attrition`.** A milestone is attrition when a resource running down earns it. It marks progress REACHED and never competence shown, because the shortest path to it is to play badly. Recording it is legitimate; scoring it as competence is not.
 - **The split is measured, not declared, and it reads no field name.** `measureProgressions` watches every numeric channel the evidence publishes across the reference and every baseline, and calls a milestone attrition when three measured statements hold: its check reads a numeric channel; that channel never rose and fell at least once, over every snapshot of every trajectory; and the check does not hold at the initial value of that channel. Attrition propagates through `requires`, because `MilestoneTracker` admits a milestone only after its prerequisites passed.
 - A hardcoded `lives`/`health`/`shields` list would have failed the way a name match already failed one layer down: ALE spells its terminal flag `terminal`, Gymnasium `terminated`, stable-retro `episodeDone`. A fixture channel named `lives` that counts rescued divers only rises, and the measurement classifies it as the achievement it is.
@@ -27,7 +47,7 @@ All notable changes to Playproof are documented here.
 
   | packaged contract | gated behind | of | prerequisite reached by a baseline | open at one instant |
   |---|---|---|---|---|
-  | ALE Breakout | `score-opened` | 6 of 6 | no, 0 of 7 | 3 of 6, after 32 inputs |
+  | ALE Breakout, before the ladder above | `score-opened` | 6 of 6 | no, 0 of 7 | 3 of 6, after 32 inputs |
   | stable-retro Airstriker | `score-opened` | 5 of 5 | yes, 2 of 28 | 3 of 5, after 41 inputs |
   | Gymnasium CartPole | `survived-25-steps` | 5 of 5 | yes, 2 of 6 | 3 of 5, after 25 steps |
   | Gymnasium FrozenLake | `reached-goal` | 3 of 3 | no, 0 of 8 | 3 of 3, after 6 steps |

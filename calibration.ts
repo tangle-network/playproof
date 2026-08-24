@@ -215,11 +215,13 @@ function firstPassTurn<S>(
  * reference with one input replaced, over the prefix that ends where the check
  * first passed. Milestones that fire at the same turn share one sweep.
  *
- * Measured on ALE Breakout, whose two hashes fire after 32 inputs over the
- * vocabulary NOOP/FIRE/RIGHT/LEFT: 40 of the 96 single-input substitutions
- * still reproduced both hashes, at 16 of the 32 turns, and all 16 applied at
- * once reproduced them too. `FIRE` while the ball is already in flight is a
- * state no-op, so those logs reach a bit-identical emulator state.
+ * Measured on a Breakout contract whose two hashes fire after 32 inputs over
+ * the vocabulary NOOP/FIRE/RIGHT/LEFT: 56 of the 96 single-input substitutions
+ * still reproduced both hashes, at 21 of the 32 turns. `FIRE` while the ball is
+ * already in flight is a state no-op, so those logs reach a bit-identical
+ * emulator state. That number is why the packaged Breakout contract states no
+ * hash at all: the check names a state half a trillion 32-input logs can stand
+ * in, and no independent control ever reached it.
  */
 export function probeOpaqueCollisions<S>(
   game: Game<S>,
@@ -549,11 +551,11 @@ export interface ContractCollapse extends ContractGate {
    * input, in contract order.
    *
    * This is the second way a contract counts one event more than once, and it
-   * is independent of `requires`. Measured on the packaged contracts: ALE
-   * Breakout opens `score-opened`, `frame-at-first-score`, and
-   * `save-at-first-score` at input 32, and stable-retro Airstriker opens three
-   * of its five at one input too. Three milestone ids for one moment of play is
-   * three points of a score that a run either has all of or none of.
+   * is independent of `requires`. Measured on stable-retro Airstriker: three of
+   * its five milestones open at one input. Three milestone ids for one moment of
+   * play is three points of a score that a run either has all of or none of.
+   * The packaged ALE Breakout contract used to open three at input 32 and now
+   * opens its seven rungs at seven distinct inputs.
    */
   simultaneous: string[]
   /** The input index those milestones share, or -1 when no two share one. */
