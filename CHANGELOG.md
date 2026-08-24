@@ -2,7 +2,7 @@
 
 All notable changes to Playproof are documented here.
 
-## 0.8.0
+## 0.9.0
 
 ### A tag cannot publish unless ci passed on the commit it points at
 
@@ -32,6 +32,8 @@ All notable changes to Playproof are documented here.
 - **No rung requires another.** `engineState.score` rises and never falls, measured over the reference and every baseline, so `score >= 18` cannot pass before `score >= 8` and a `requires` edge would restate the check while reporting a collapse a seven-rung ladder does not have. `report.collapse.collapses` is now `false` for this target, and its seven rungs first pass at seven distinct inputs (32, 71, 137, 259, 404, 636, 839).
 - **`ale.test.mts` keeps a demonstration contract** derived from the same reference, with the two hash tiers, a `requires` chain and `life-lost`. The screen-frame and save-file evidence tiers, the opaque-collision sweep, the attrition classifier and the collapse gate stay under test on the real emulator; they are simply no longer things a Breakout player is graded on. `screen-blind` joins the two steering controls as a permanent gate, and the test now asserts the strongest control does NOT reach the top rung.
 - **What a consumer must do.** The packaged reference file, the derived contract and its hash all change. A stored `Attestation` or `EpisodeRecord` against the old contract does not verify against the new one, and a milestone id from it (`score-opened`, `score-tier-2`, `score-tier-4`, `life-lost`, `frame-at-first-score`, `save-at-first-score`) no longer exists. Pass the previous reference through `makeAle({ game: 'breakout', reference })` to keep the old contract. No adapter behaviour changed: the worker, the evidence keys, the observation, the input vocabulary and the seed handling are untouched.
+
+## 0.8.0
 
 ### A milestone earned by dying is not evidence of skill
 
