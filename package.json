@@ -130,7 +130,7 @@
     "build": "pnpm clean && tsup && node scripts/copy-assets.mjs",
     "check:boundary": "node scripts/check-boundary.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx playproof.test.mts && tsx calibration.test.mts && tsx episode.test.mts && tsx game-over.test.mts && tsx observation.test.mts && tsx platform.test.mts && tsx desktop-platforms.test.mts && tsx drivers.test.mts && tsx campaign.test.mts && tsx release-gate.test.mts",
+    "test": "tsx playproof.test.mts && tsx calibration.test.mts && tsx episode.test.mts && tsx game-over.test.mts && tsx observation.test.mts && tsx platform.test.mts && tsx desktop-platforms.test.mts && tsx drivers.test.mts && tsx campaign.test.mts && tsx matrix.test.mts && tsx persistent-driver.test.mts && tsx stream-driver.test.mts && tsx blindness.test.mts && tsx release-gate.test.mts",
     "test:pyboy": "tsx pyboy-tetris.test.mts",
     "test:retro": "tsx stable-retro.test.mts",
     "test:ale": "tsx ale.test.mts",

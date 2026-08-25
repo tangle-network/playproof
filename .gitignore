@@ -14,3 +14,6 @@ coverage/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Experiments. A study runs here; nothing under it is ever committed.
+runs/
