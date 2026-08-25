@@ -722,6 +722,156 @@ Reference trajectories can come from a human, a scripted policy, another agent, 
 
 “Any game” does not mean zero integration. It means the benchmark core remains unchanged while the platform bridge declares inputs, observations, evidence, trust, and calibration. Anti-cheat-protected or networked games may only permit platform receipts or approved title-side instrumentation.
 
+## The matrix: comparing profiles across games
+
+One benchmark answers "how did this agent do on this game". A matrix answers the
+question a single game cannot: **does the order survive a change of game?** You
+write one definition file, a runner plays every cell, and each cell produces the
+same result vector.
+
+A **cell** is one profile playing one game at one objective, under one protocol
+and one sensor, repeated `reps` times. Every one of those is part of the cell's
+identity, and none of them has a default, because each changes what the number
+means.
+
+### Add a game
+
+A game is one line naming the adapter that boots it and the target that adapter
+takes — an `ale-py` ROM id, a Gymnasium environment id, a stable-retro game.
+
+```
+game.breakout adapter=ale           target=breakout
+game.pacman   adapter=ale           target=ms_pacman
+game.cartpole adapter=gymnasium     target=CartPole-v1
+game.air      adapter=stable-retro  target=Airstriker-Genesis
+game.puzzle   adapter=native-2048   target=2048
+```
+
+Nothing else is needed if playproof ships a reference for that target. If it
+does not, author one first (see **Calibration** above) and gate it with
+`PackagedContract.calibrate`, which refuses a contract a trivial baseline can
+satisfy. A game with no reference is not yet a benchmark.
+
+### Add a profile
+
+A profile is an arm. It is either a coding or model CLI, or a local control
+program that costs nothing, and never both.
+
+```
+profile.opus   harness=claude-code model=claude-opus-5 effort=high
+profile.haiku  harness=claude-code model=claude-haiku-4-5 effort=high
+profile.chaser harness=none policy=./policies/chaser note=hand-written-controller
+```
+
+A control is not the subject of the study. It bounds what an agent profile has
+to beat, which is what makes an agent's number mean anything.
+
+`transport` selects how the profile's process is run, and it is a measurable
+axis rather than a fixed cost:
+
+| transport | shape | measured |
+|---|---|---|
+| `per-decision` | one child process per decision | 37.5 ms a decision, 83% of episode wall clock; a policy **cannot keep state** |
+| `persistent` (default) | one child process per episode, request/response over stdio | 0.97 ms a decision, 38x less; state survives |
+| `stream` | the game writes observations into a sandbox directory and never waits; the agent appends actions to a file | the agent's thinking rate is decoupled from the frame rate |
+
+`stream` is the asynchronous one. The agent reads when it likes — with as many
+subagents and analysis scripts as it wants — and the game consumes one queued
+action per decision. It holds no emulator handle, so there is no object graph to
+isolate: the boundary is the filesystem.
+
+### Define a matrix
+
+```
+# study.matrix — two arms, two games, one protocol, one sensor
+profile.opus   harness=claude-code model=claude-opus-5 effort=high
+profile.chaser harness=none policy=./policies/chaser
+
+game.breakout  adapter=ale target=breakout
+game.pacman    adapter=ale target=ms_pacman
+
+objective.score goal=maximize:score horizon=3000 budgetUsd=8
+
+protocol.det   frameskip=4 sticky=0 seeds=1
+sensor.ascii   pixels=off channels=-
+
+reps 1
+```
+
+The cell set is the cross product times `reps`. An unknown key is refused rather
+than ignored, because a typo in an axis key silently drops the axis while the
+study still produces numbers.
+
+**The protocol states the clock.** `frameskip` is emulator frames per decision,
+`sticky` is the sticky-action probability, `seeds` is how many seeds to sweep. A
+`stream` profile also requires `queue=<depth>` and `empty=noop|repeat-last`,
+because an asynchronous agent leaves the game to decide what acts while it is
+thinking, and `repeat-last` (keep doing what you were told) and `noop` (stop)
+are different games.
+
+**The sensor states what the agent may see.** `pixels=on scale=N` publishes the
+rendered screen next to the text frame. `channels=ball_x@99,paddle_x@72` names
+RAM bytes — a *harness* channel that reaches milestones and the result vector,
+never the agent, because routing it to the agent would cross the one boundary
+playproof exists to hold.
+
+Three refusals you will meet, all measured rather than stylistic:
+
+- `seeds=5` at `sticky=0` is refused. On ALE Breakout, seeds 0..4 under one
+  fixed script gave **1 distinct trajectory of 5** at `sticky=0` and **3 of 5**
+  at `sticky=0.25`. Five inert seeds report one trajectory five times.
+- A sensor an adapter cannot honour is refused, never downgraded. Gymnasium
+  publishes no screen; only ALE publishes named RAM bytes.
+- Editing `frameskip=4` to `frameskip=8` under the same protocol name changes
+  every cell id beneath it, so an edited protocol cannot reuse the results of
+  the one it replaced.
+
+### Run it
+
+```bash
+tsx matrix.mts study.matrix --out runs/study/cells.json
+```
+
+Each cell prints a line as it finishes, and the artifact holds every row plus
+the summary. A cell whose game cannot be built under its own protocol is a
+**blocked** row carrying the reason — never a zero, because a profile that never
+played did not lose.
+
+That case is real, not defensive. The bundled Breakout reference is recorded at
+one clock, so asking for a different one makes its contract underivable:
+
+| change from the bundled reference | contract derives? |
+|---|---|
+| `sticky` 0 → 0.10 | yes, 6 milestones |
+| `sticky` 0 → 0.25 | **no** — `score-tier-2` never fires on the reference |
+| `frameskip` 4 → 2 | **no** — `score-opened` never fires |
+| `frameskip` 4 → 8 | **no** — `score-tier-2` never fires |
+| `seed` 0 → 7 | yes, 6 milestones |
+
+### The result vector
+
+Each row carries its full identity and then what it measured: `score`, `deaths`,
+`decisions`, `emulatorFrames`, `wallMs`, `tokens`, `usd`, `cleared`, `verified`,
+`milestones`, `verdict`, `stoppedBy`, `distinctInputs`, `replayDivergence` and
+`actionsHash`.
+
+**A field nobody measured is `null`, never `0`.** A game with no life counter
+reports `deaths: null`, because `0` would claim the run died zero times.
+Playproof prices a decision in dollars through the driver and never sees a token
+count, so `tokens` is `null` too.
+
+### The cross-game statistic
+
+`generalization(rows)` is the number a matrix exists to produce: mean pairwise
+Kendall tau-b between per-game rankings. It reports its own limits beside it —
+`folds` (games, not pairs), `effectiveArms` against `declaredArms`, and every
+excluded cell.
+
+Two arms that emit identical action sequences are **one arm wearing two names**,
+and a tau over "three profiles" that are really two is not the statistic it says
+it is. `assertJoinable(rows)` refuses to pool rows measured under different
+protocols or different sensors, rather than averaging across the dominant term.
+
 ## Signed publication artifacts
 
 A signed run pins:
