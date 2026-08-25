@@ -46,10 +46,32 @@ The equivalent free-ROM regression (`pnpm test:pyboy-libbet`) runs in CI on ever
    git push origin v0.1.0
    ```
 
-4. The `publish` workflow rebuilds and verifies the source, creates one tarball, records its SHA-256, uploads it as an ephemeral workflow artifact, and publishes that exact file.
-5. The workflow then creates the immutable GitHub release with the same tarball and `SHA256SUMS`.
+4. The `require-green-ci` job resolves the commit the tag points at and reads the `ci` workflow result for that commit. The release continues only when `ci` concluded `success` there and all six required jobs ran and passed.
+5. The `verify` job rebuilds and verifies the source, creates one tarball, records its SHA-256, and uploads it as an ephemeral workflow artifact.
+6. The publish job publishes that exact file and creates the immutable GitHub release with the same tarball and `SHA256SUMS`.
 
 The workflow is idempotent: retrying an already-published version verifies the artifact identity and skips the npm mutation.
+
+## The ci result gates the tag
+
+`publish.yml` never publishes a commit that `ci` has not passed. The gate refuses on every answer except a green one:
+
+| what the Actions API reports for the tagged commit | outcome |
+|---|---|
+| the `ci` workflow concluded `success`, and all six required jobs passed | publish |
+| the `ci` workflow concluded `failure`, `cancelled`, `timed_out`, `neutral`, `skipped`, `stale` or `action_required` | refuse |
+| no `ci` run exists for that commit | wait up to 10 minutes, then refuse |
+| a `ci` run is still queued or running | wait up to 60 minutes, then refuse |
+| a run is green but a required job is absent, or its gate step was skipped | refuse |
+| the API cannot be read | refuse |
+
+The six required job names live in `release-gate.mts` rather than being read from the tagged `ci.yml`, because a workflow file edited to remove a job would otherwise agree with itself. `release-gate.test.mts` fails when a name stops matching `ci.yml`, and states every refusal above as an executable case.
+
+### Retry a release, and override a red ci
+
+Run the `publish` workflow manually with `release_tag` set to the existing tag. The retry reads the `ci` result the same way a tag push does; it is not a way around the gate.
+
+To publish although `ci` is not green, set `ci_override_reason` on the same manual run to at least 12 characters that say why. The run reports that it published on a human override, and the reason is recorded in the workflow log and the job summary. There is no override on a tag push.
 
 ## Release integrity without provenance
 

@@ -4,6 +4,15 @@ All notable changes to Playproof are documented here.
 
 ## 0.9.0
 
+### A tag cannot publish unless ci passed on the commit it points at
+
+- **The defect.** `publish.yml` triggered on a `v*` tag and ran its own `verify` job, which checks the tag identity, runs `pnpm run ci` and packages the archive. Nothing in it read the `ci` workflow, so a tag published whatever it pointed at. The five real-emulator gates (PyBoy, Gymnasium, stable-retro, ALE, RetroArch) never ran on the release path at all. Measured on 0.8.0: the release pull request run concluded `failure`, the tag was pushed seven seconds after the merge landed, and the publish workflow completed at 18:35:54 UTC while `ci` on `main` did not conclude until 18:38:58 UTC. The package shipped three minutes before anything had a verdict on that commit.
+- **The gate.** A new `require-green-ci` job resolves the commit the tag points at, then reads the `ci` workflow runs for that exact commit through the Actions API. It allows the release on one answer and refuses every other one: no run, a run still going after its window, any conclusion other than `success`, a green run that never ran a required job, a job that is green while the step doing the work was skipped, and an API that cannot be read. `verify` is unchanged and runs beside it; `publish-npm` now needs both.
+- **A missing result is a refusal, not a pass.** The dangerous case is a tag on a commit `ci` never saw, because an absent result reads as "not failing". The gate waits up to 10 minutes for a run to appear and up to 60 minutes for one that is running, then refuses.
+- **The six required jobs are named in `release-gate.mts`, not read from the tagged `ci.yml`**, so a workflow file edited to drop a job cannot vouch for itself. `release-gate.test.mts` fails when a name stops matching `ci.yml`.
+- **`workflow_dispatch` retries are subject to the same reading.** A red or absent `ci` can be overridden only through the new `ci_override_reason` input, only on a manual dispatch, and only with at least 12 characters of stated reason. The run then reports that it published on a human override rather than on a green `ci`. A tag push has no way to reach that path.
+- **The decision is a pure function under test.** `decideRelease` takes the runs, the jobs and the elapsed time and returns allow, wait or refuse. `release-gate.test.mts` states 19 cases, including each of `failure`, `cancelled`, `timed_out`, `action_required`, `neutral`, `skipped`, `stale` and a null conclusion, a run belonging to another commit, and a green run missing one of the six jobs.
+
 ### The Breakout contract now measures how well a run played, not that it played
 
 - **The defect.** The packaged ALE Breakout contract was derived from a reference that reached score 5 over 210 inputs, so its top achievement was `score >= 4`. Nothing in it could tell 7 points from 24. Excluding the point for dying stopped it ranking the worse player first; it did not give it any resolution above the bottom of the range.
