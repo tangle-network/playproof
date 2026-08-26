@@ -614,6 +614,24 @@ export function parseGoal(goal: string): { direction: 'maximize' | 'minimize'; f
 const PRACTICE_SEED_OFFSET = 1_000_003
 
 /**
+ * Slowest a practice game may be asked to run, in milliseconds per decision.
+ *
+ * An agent reads files and thinks; it cannot use a decision that arrives faster
+ * than it can read one. A floor here also bounds the practice sandbox, because
+ * the stream transport writes one file per decision.
+ */
+const PRACTICE_PACE_FLOOR_MS = 250
+
+/**
+ * Most decisions one practice episode may take, whatever the budget says.
+ *
+ * The budget is wall clock and the horizon is decisions, and dividing one by
+ * the other trusts the pace to be sane. This is the backstop for when it is
+ * not: a bound that does not depend on any declared number.
+ */
+const PRACTICE_MAX_TURNS = 20_000
+
+/**
  * Phase one: let the agent BUILD a player against a game nobody scores.
  *
  * The agent works in its own directory with a live practice instance streamed
@@ -650,9 +668,17 @@ async function authorPolicy(
     return { usd: null, tokens: null, minutes: 0, policy: null, detail: `no practice game: ${(error as Error).message}` }
   }
 
-  // Paced like a live game so the practice feels like the real thing, and long
-  // enough to fill the build budget rather than ending under the agent.
-  const paceMs = cell.protocol.paceMs ?? 1000
+  // Paced like a live game so the practice feels like the real thing.
+  //
+  // A protocol may legitimately state `pace=0`, meaning the SCORED episode runs
+  // as fast as the host can step it, which is correct for a program. Practice
+  // is not that: an unpaced practice game spins at full speed for the whole
+  // build budget. Measured on the first run of this code, `pace=0` produced
+  // 480,000 practice turns, 449,821 observation files and 1.7 GB of disk in one
+  // cell, and the cell never finished. Practice therefore has its own floor.
+  const paceMs = cell.protocol.paceMs === null || cell.protocol.paceMs <= 0
+    ? PRACTICE_PACE_FLOOR_MS
+    : cell.protocol.paceMs
   const driver = createStreamSandboxDriver({
     dir,
     commands: practice.commands,
@@ -681,7 +707,7 @@ async function authorPolicy(
       practice.contract,
       driver,
       cell.objective.budgetUsd,
-      Math.max(1, Math.ceil(budgetMs / Math.max(1, paceMs))),
+      Math.min(PRACTICE_MAX_TURNS, Math.max(1, Math.ceil(budgetMs / paceMs))),
       cell.seed + PRACTICE_SEED_OFFSET,
       stop.signal,
     )
