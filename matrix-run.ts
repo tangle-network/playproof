@@ -145,6 +145,15 @@ export interface CellResult {
   scoreField: string | null
   /** Which way is better on that channel. A minimize goal ranks inverted. */
   scoreDirection: 'maximize' | 'minimize' | null
+  /**
+   * Credential path the agent billed against, or null when nothing said.
+   *
+   * Reported beside `usd` because it decides whether that number can exist. An
+   * `oauth` arm bills a plan and reports no per-request cost, so its null is
+   * UNBILLED THIS WAY, not free, and a study that compares it to a metered arm
+   * on cost is comparing a measurement to an absence.
+   */
+  authMode: 'api-key' | 'oauth' | null
   /** Whether the game declared itself finished. Null when it declares no end. */
   cleared: boolean | null
   /** Milestones the replay reproduced. */
@@ -396,6 +405,7 @@ function blockedResult(cell: MatrixCell, reason: BlockedReason, detail: string, 
     // see that an excluded row and a played row were aimed at the same channel.
     scoreField: null,
     scoreDirection: null,
+    authMode: null,
     cleared: null,
     verified: [],
     milestones: { verified: 0, total: 0 },
@@ -550,6 +560,7 @@ export async function runCell(cell: MatrixCell, options: RunCellOptions = {}): P
       // same ranks the profile nobody metered first on cost per point.
       tokens: meter.tokens,
       usd: meter.metered && meter.costUsd === null ? null : (meter.costUsd ?? 0) + record.spentUsd,
+      authMode: meter.authMode,
       build: authored,
       cleared: record.gameOver,
       verified: record.verified,
@@ -743,18 +754,24 @@ async function authorPolicy(
   }
 }
 
-function meterOf(driver: AgentDriver): { metered: boolean; costUsd: number | null; tokens: number | null } {
+function meterOf(driver: AgentDriver): {
+  metered: boolean
+  costUsd: number | null
+  tokens: number | null
+  authMode: 'api-key' | 'oauth' | null
+} {
   const reporter = driver as { health?: () => Record<string, unknown> }
-  if (typeof reporter.health !== 'function') return { metered: false, costUsd: null, tokens: null }
+  if (typeof reporter.health !== 'function') return { metered: false, costUsd: null, tokens: null, authMode: null }
   const health = reporter.health()
   // `metered` asks whether this transport HAS a cost channel, which is a
   // different question from whether anything came down it. A per-decision
   // control that declares `fixedCostUsd: 0` is genuinely free and must total
   // zero; only a transport that owns a meter can report the absence of one.
-  if (!('costUsd' in health)) return { metered: false, costUsd: null, tokens: null }
+  if (!('costUsd' in health)) return { metered: false, costUsd: null, tokens: null, authMode: null }
   const nonNegative = (value: unknown): number | null =>
     typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
-  return { metered: true, costUsd: nonNegative(health.costUsd), tokens: nonNegative(health.tokens) }
+  const mode = health.authMode === 'api-key' || health.authMode === 'oauth' ? health.authMode : null
+  return { metered: true, costUsd: nonNegative(health.costUsd), tokens: nonNegative(health.tokens), authMode: mode }
 }
 
 function transportNoteOf(driver: AgentDriver): string | null {
