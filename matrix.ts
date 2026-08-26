@@ -95,6 +95,22 @@ export interface MatrixProfile {
   kind: ProfileKind
   /** Harness command for `kind: 'harness'`, executable path for `kind: 'policy'`. */
   command: string
+  /**
+   * Launcher that AUTHORS a policy, for a profile that builds instead of plays.
+   *
+   * When set, the cell has two phases. The agent gets a practice game nobody
+   * scores and must leave an executable `policy` behind; that program is then
+   * run cold against a fresh scored instance. Build cost and play score become
+   * separate columns, because they answer different questions.
+   *
+   * Without it a profile plays live, and its start-up time and typing rate are
+   * charged against its score. MEASURED across nine cells of the first study:
+   * the rank correlation between actions delivered and score was 0.94, so a
+   * live cell very nearly measures delivery rather than play.
+   */
+  author?: string
+  /** Wall-clock minutes the authoring phase may take. Required with `author`. */
+  buildMinutes?: number
   /** Model id, for a harness profile that selects one. */
   model?: string
   /** Reasoning effort, for a harness that accepts one. */
@@ -356,7 +372,7 @@ export function enumerateCells(definition: MatrixDefinition): MatrixCell[] {
 
 const ADAPTERS = new Set<MatrixGame['adapter']>(['ale', 'gymnasium', 'stable-retro', 'native-2048'])
 
-const PROFILE_KEYS = new Set(['harness', 'model', 'effort', 'policy', 'note', 'transport'])
+const PROFILE_KEYS = new Set(['harness', 'model', 'effort', 'policy', 'note', 'transport', 'author', 'buildMin'])
 const GAME_KEYS = new Set(['adapter', 'target', 'note'])
 const OBJECTIVE_KEYS = new Set(['goal', 'horizon', 'budgetUsd'])
 const PROTOCOL_KEYS = new Set(['frameskip', 'sticky', 'seeds', 'seed0', 'queue', 'empty', 'pace'])
@@ -480,6 +496,23 @@ export function parseMatrix(text: string): MatrixDefinition {
         id,
         kind: isControl ? 'policy' : 'harness',
         command: isControl ? policy! : harness!,
+        ...(map.get('author') === undefined
+          ? (() => {
+              if (map.get('buildMin') !== undefined) {
+                throw new Error(
+                  `${where} (profile.${id}): states buildMin without author, and a build budget with`
+                  + ' nothing to build is a number that changes no cell',
+                )
+              }
+              return {}
+            })()
+          : {
+              author: map.get('author')!,
+              // Required alongside `author`: an authoring phase with no clock
+              // runs until the agent decides to stop, which is not a budget and
+              // is not comparable between profiles.
+              buildMinutes: integer(map, 'buildMin', `${where} (profile.${id})`, 1),
+            }),
         transport,
         ...(map.get('model') === undefined ? {} : { model: map.get('model')! }),
         ...(map.get('effort') === undefined ? {} : { effort: map.get('effort')! }),
@@ -605,6 +638,20 @@ export function parseMatrix(text: string): MatrixDefinition {
   // what the cell measures, so they stop being optional the moment one appears.
   // They stay optional otherwise: a polled game never queues an action, and
   // demanding a queue depth it cannot use would be noise stated as rigour.
+  for (const profile of profiles) {
+    // An authored policy is a PROGRAM, and a program is run by a transport that
+    // keeps one process for the episode. Streaming an authored policy would put
+    // its author's clock back into the measurement, which is the whole thing
+    // authoring exists to remove.
+    if (profile.author !== undefined && profile.transport === 'stream') {
+      throw new Error(
+        `profile.${profile.id} authors a policy, so it must be evaluated with transport=persistent`
+        + ' or transport=per-decision: streaming it would charge the program for its author\'s clock,'
+        + ' which is what authoring removes',
+      )
+    }
+  }
+
   const streaming = profiles.filter((profile) => profile.transport === 'stream')
   if (streaming.length > 0) {
     for (const protocol of protocols) {

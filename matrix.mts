@@ -13,7 +13,7 @@
  */
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import { enumerateCells, parseMatrix } from './matrix'
+import { cellName, enumerateCells, parseMatrix } from './matrix'
 import { assertJoinable, effectiveArms, generalization, runCell, type CellResult } from './matrix-run'
 
 // SEVERAL definitions, pooled into one study.
@@ -43,7 +43,29 @@ const definitionPath = definitionPaths.join(' ')
 
 const rows: CellResult[] = []
 for (const [index, cell] of cells.entries()) {
-  const row = await runCell(cell)
+  // A cell is announced BEFORE it runs, and says it is alive while it runs.
+  //
+  // Printing only on completion makes a slow cell and a hung one identical in
+  // the log. Measured: one authoring cell took 2h13m to play 2000 decisions
+  // with a compiled search, and produced no output for all of it, so the run
+  // could not be told from a hang without attaching to the process.
+  const name = cellName(cell)
+  const label = cell.profile.author === undefined
+    ? name
+    : `${name} (build ${cell.profile.buildMinutes}m, then evaluate)`
+  console.error(`[${index + 1}/${cells.length}] ${label} ...`)
+  const cellStarted = Date.now()
+  const heartbeat = setInterval(() => {
+    const mins = Math.round((Date.now() - cellStarted) / 60_000)
+    console.error(`[${index + 1}/${cells.length}] still running, ${mins}m elapsed`)
+  }, 60_000)
+  heartbeat.unref()
+  let row: CellResult
+  try {
+    row = await runCell(cell)
+  } finally {
+    clearInterval(heartbeat)
+  }
   rows.push(row)
   const headline = row.status === 'played'
     ? `score=${row.score ?? '-'} deaths=${row.deaths ?? '-'} decisions=${row.decisions}`
