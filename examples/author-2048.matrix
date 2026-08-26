@@ -5,15 +5,15 @@
 # Build cost and play score are separate columns, because a program that takes
 # an agent twenty minutes and five dollars to write is not thereby a worse
 # program.
-profile.opus   harness=./harnesses/claude-code author=./harnesses/author-policy model=claude-opus-5             buildMin=8 transport=persistent
-profile.sonnet harness=./harnesses/claude-code author=./harnesses/author-policy model=claude-sonnet-5           buildMin=8 transport=persistent
-profile.haiku  harness=./harnesses/claude-code author=./harnesses/author-policy model=claude-haiku-4-5-20251001 buildMin=8 transport=persistent
+profile.opus   harness=./harnesses/claude-code author=./harnesses/author-policy model=claude-opus-5             buildMin=6 transport=persistent
+profile.sonnet harness=./harnesses/claude-code author=./harnesses/author-policy model=claude-sonnet-5           buildMin=6 transport=persistent
+profile.haiku  harness=./harnesses/claude-code author=./harnesses/author-policy model=claude-haiku-4-5-20251001 buildMin=6 transport=persistent
 
 game.puzzle adapter=native-2048 target=2048
 
 # A real horizon. A program does not need the clock a typist needs, so the
 # episode can be as long as the game deserves.
-objective.score goal=maximize:score horizon=2000 budgetUsd=5
+objective.score goal=maximize:score horizon=400 budgetUsd=4
 
 protocol.det frameskip=1 sticky=0 seeds=1 queue=8 empty=noop pace=0
 sensor.ascii pixels=off channels=-

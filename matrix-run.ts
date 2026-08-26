@@ -332,7 +332,7 @@ function streamDir(cell: MatrixCell, options: RunCellOptions): string {
 }
 
 /** Watch the privileged channel as the episode produces it, for the vector. */
-function watchEvidence(source: Game<unknown>): { game: Game<unknown>; snapshots: Record<string, number>[] } {
+export function watchEvidence(source: Game<unknown>): { game: Game<unknown>; snapshots: Record<string, number>[] } {
   const snapshots: Record<string, number>[] = []
   // `playEpisode` finalizes by replaying the log, which walks the trajectory a
   // second time. Only the first pass is kept, or every channel is counted twice.
@@ -360,7 +360,7 @@ function watchEvidence(source: Game<unknown>): { game: Game<unknown>; snapshots:
   }
 }
 
-function channel(snapshots: readonly Record<string, number>[], key: string): number[] {
+export function channel(snapshots: readonly Record<string, number>[], key: string): number[] {
   return snapshots.map((s) => s[key]).filter((v): v is number => v !== undefined)
 }
 
