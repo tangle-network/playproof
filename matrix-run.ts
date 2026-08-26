@@ -27,7 +27,7 @@
  * Env knobs:
  *   PLAYPROOF_PYTHON   interpreter that runs an emulator worker (default python3)
  */
-import { mkdtempSync } from 'node:fs'
+import { accessSync, constants as fsConstants, existsSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { attestRun } from './attestation'
@@ -134,6 +134,14 @@ export interface CellResult {
    * which channel produced it is not comparable, and one that reads a single
    * hardcoded name scores every game that does not publish it as null.
    */
+  /**
+   * What the authoring phase spent, when the profile built its player.
+   *
+   * Kept apart from `usd` and `tokens`, which are what the EVALUATION spent.
+   * Merging them would answer neither question: the point of authoring is that
+   * building is a cost you choose to pay and playing is what gets scored.
+   */
+  build: { usd: number | null; tokens: number | null; minutes: number; policy: string | null } | null
   scoreField: string | null
   /** Which way is better on that channel. A minimize goal ranks inverted. */
   scoreDirection: 'maximize' | 'minimize' | null
@@ -383,6 +391,7 @@ function blockedResult(cell: MatrixCell, reason: BlockedReason, detail: string, 
     wallMs,
     tokens: null,
     usd: 0,
+    build: null,
     // A blocked cell still states what it WOULD have scored on, so a reader can
     // see that an excluded row and a played row were aimed at the same channel.
     scoreField: null,
@@ -453,6 +462,23 @@ export async function runCell(cell: MatrixCell, options: RunCellOptions = {}): P
   const makeDriver = options.driver ?? driverFor
   const started = now()
 
+  // PHASE ONE. A profile that authors builds its player first, against a
+  // practice game nobody scores, and the program it leaves behind is what the
+  // scored episode actually runs. The agent is not running by then.
+  let authored: CellResult['build'] = null
+  let policyCommand: string | null = null
+  if (cell.profile.author !== undefined) {
+    const attempt = await authorPolicy(cell, options, now)
+    authored = { usd: attempt.usd, tokens: attempt.tokens, minutes: attempt.minutes, policy: attempt.policy }
+    if (attempt.policy === null) {
+      // Blocked, never scored zero. A profile that built nothing did not play
+      // badly; it produced no player, and those are different findings.
+      const row = blockedResult(cell, 'driver-unusable', attempt.detail ?? 'no policy', now() - started)
+      return { ...row, build: authored }
+    }
+    policyCommand = attempt.policy
+  }
+
   let built: BuiltGame
   try {
     built = await build(cell.game, cell.protocol, cell.sensor, cell.seed)
@@ -463,8 +489,15 @@ export async function runCell(cell: MatrixCell, options: RunCellOptions = {}): P
   try {
     let driver: AgentDriver
     try {
+      // An authored cell is evaluated as a PROGRAM: the profile becomes a local
+      // policy whose command is the file the agent left. Its wire format is
+      // `first-word` and it costs nothing to run, which is true — the money was
+      // spent in phase one and is reported there.
+      const evaluated = policyCommand === null
+        ? cell.profile
+        : { ...cell.profile, kind: 'policy' as const, command: policyCommand }
       driver = makeDriver(
-        cell.profile,
+        evaluated,
         built.commands,
         cell.sensor,
         cell.protocol,
@@ -517,6 +550,7 @@ export async function runCell(cell: MatrixCell, options: RunCellOptions = {}): P
       // same ranks the profile nobody metered first on cost per point.
       tokens: meter.tokens,
       usd: meter.metered && meter.costUsd === null ? null : (meter.costUsd ?? 0) + record.spentUsd,
+      build: authored,
       cleared: record.gameOver,
       verified: record.verified,
       milestones: record.score,
@@ -574,6 +608,113 @@ export function parseGoal(goal: string): { direction: 'maximize' | 'minimize'; f
   const at = goal.indexOf(':')
   const direction = goal.slice(0, at) === 'minimize' ? 'minimize' : 'maximize'
   return { direction, field: goal.slice(at + 1) }
+}
+
+/** Seed offset that keeps a practice game from ever being the scored game. */
+const PRACTICE_SEED_OFFSET = 1_000_003
+
+/**
+ * Phase one: let the agent BUILD a player against a game nobody scores.
+ *
+ * The agent works in its own directory with a live practice instance streamed
+ * into it, for a stated number of minutes. What it must leave behind is an
+ * executable `policy`. It is not running when that policy is evaluated, so
+ * nothing it does here can reach the graded episode.
+ *
+ * The practice instance runs at a DIFFERENT SEED. Practising on the very game
+ * you are scored on is memorisation, and the whole point of asking for a
+ * program is that the program has to work on a board it has not seen.
+ */
+async function authorPolicy(
+  cell: MatrixCell,
+  options: RunCellOptions,
+  now: () => number,
+): Promise<{ usd: number | null; tokens: number | null; minutes: number; policy: string | null; detail: string | null }> {
+  const profile = cell.profile
+  const started = now()
+  const dir = join(
+    options.streamRoot ?? mkdtempSync(join(tmpdir(), 'playproof-author-')),
+    `${cellName(cell).replace(/[^\w.-]+/gu, '_')}-build`,
+  )
+  const budgetMs = (profile.buildMinutes ?? 1) * 60_000
+
+  let practice: BuiltGame
+  try {
+    practice = await (options.build ?? buildAdapterGame)(
+      cell.game,
+      cell.protocol,
+      cell.sensor,
+      cell.seed + PRACTICE_SEED_OFFSET,
+    )
+  } catch (error) {
+    return { usd: null, tokens: null, minutes: 0, policy: null, detail: `no practice game: ${(error as Error).message}` }
+  }
+
+  // Paced like a live game so the practice feels like the real thing, and long
+  // enough to fill the build budget rather than ending under the agent.
+  const paceMs = cell.protocol.paceMs ?? 1000
+  const driver = createStreamSandboxDriver({
+    dir,
+    commands: practice.commands,
+    queueDepth: cell.protocol.queue ?? 8,
+    whenEmpty: cell.protocol.whenEmpty ?? 'noop',
+    paceMs,
+    fixedCostUsd: 0,
+    command: isAbsolute(profile.author!) ? profile.author! : resolve(profile.author!),
+    args: [
+      ...(profile.model === undefined ? [] : ['--model', profile.model]),
+      ...(profile.effort === undefined ? [] : ['--effort', profile.effort]),
+    ],
+    env: {
+      PLAYPROOF_GOAL: cell.objective.goal,
+      PLAYPROOF_HORIZON: String(cell.objective.horizon),
+      PLAYPROOF_SPEND_CEILING: String(cell.objective.budgetUsd),
+      PLAYPROOF_BUILD_MINUTES: String(profile.buildMinutes ?? 1),
+    },
+  })
+
+  const stop = new AbortController()
+  const timer = setTimeout(() => stop.abort(), budgetMs)
+  try {
+    await playEpisode(
+      practice.game,
+      practice.contract,
+      driver,
+      cell.objective.budgetUsd,
+      Math.max(1, Math.ceil(budgetMs / Math.max(1, paceMs))),
+      cell.seed + PRACTICE_SEED_OFFSET,
+      stop.signal,
+    )
+  } catch {
+    // The practice episode ending is not a failure. The deliverable is the file.
+  } finally {
+    clearTimeout(timer)
+    driver.close()
+    practice.dispose?.()
+  }
+
+  const meter = meterOf(driver)
+  const policyPath = join(dir, 'policy')
+  let policy: string | null = null
+  let detail: string | null = null
+  try {
+    // Executable, because it is about to be spawned. A readable-but-not-
+    // executable file is a policy that will fail to start with an error that
+    // says nothing about why.
+    accessSync(policyPath, fsConstants.X_OK)
+    policy = policyPath
+  } catch {
+    detail = existsSync(policyPath)
+      ? 'the agent left a policy that is not executable'
+      : 'the agent left no policy'
+  }
+  return {
+    usd: meter.costUsd,
+    tokens: meter.tokens,
+    minutes: (now() - started) / 60_000,
+    policy,
+    detail,
+  }
 }
 
 function meterOf(driver: AgentDriver): { metered: boolean; costUsd: number | null; tokens: number | null } {

@@ -1,0 +1,220 @@
+#!/usr/bin/env node
+/**
+ * Ask a coding agent to BUILD a program that plays, rather than to play.
+ *
+ * ## Why this exists
+ *
+ * The streaming transport measures a live player: the game runs on its own
+ * clock and whatever the agent has written is what acts. That is a real thing
+ * to measure and it is not this thing.
+ *
+ * MEASURED on the first three-profile study: across nine cells the rank
+ * correlation between ACTIONS DELIVERED and SCORE was 0.94. The score was very
+ * nearly a readout of how many actions reached the file, so an agent's start-up
+ * time and typing rate were charged against its play. One agent in that study
+ * wrote a working expectimax searcher with self-play-tuned weights and scored
+ * 240, because the program was being judged on how fast its author could type.
+ *
+ * Here the agent AUTHORS and the program PLAYS. Build cost is tokens, dollars
+ * and minutes; it is not a score penalty. Any solution qualifies — a table of
+ * heuristics, a search, weights fitted offline, a learned policy — because the
+ * evaluation only ever sees a program that answers decisions.
+ *
+ * ## What the agent gets
+ *
+ * A practice game in this directory, streamed exactly like the live transport
+ * but SCORED BY NOBODY. It may play it, break it, reimplement it or train
+ * against it for as long as its budget allows. What it must leave behind is an
+ * executable `./policy`.
+ *
+ * ## What the agent never gets
+ *
+ * The scored run. `policy` is evaluated afterwards, cold, in a separate process
+ * against a fresh instance, and the replay is attested. The agent is not
+ * running at that point, so nothing it does here can reach the graded episode.
+ *
+ * Env: PLAYPROOF_STREAM_DIR, PLAYPROOF_GOAL, PLAYPROOF_HORIZON,
+ *      PLAYPROOF_SPEND_CEILING, PLAYPROOF_BUILD_MINUTES
+ */
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { homedir, platform, tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const sandbox = process.env.PLAYPROOF_STREAM_DIR ?? process.cwd()
+
+let brief
+try {
+  brief = JSON.parse(readFileSync(join(sandbox, 'brief.json'), 'utf8'))
+} catch (error) {
+  console.error(`playproof: no readable brief.json in ${sandbox}: ${error.message}`)
+  process.exit(2)
+}
+
+const argv = process.argv.slice(2)
+const flag = (name) => {
+  const at = argv.indexOf(name)
+  return at >= 0 ? argv[at + 1] : undefined
+}
+const model = flag('--model')
+const effort = flag('--effort')
+
+const goal = process.env.PLAYPROOF_GOAL ?? 'maximize:score'
+const horizon = process.env.PLAYPROOF_HORIZON ?? 'unstated'
+const budget = process.env.PLAYPROOF_SPEND_CEILING ?? 'unstated'
+const minutes = process.env.PLAYPROOF_BUILD_MINUTES ?? 'unstated'
+
+const task = `Build a program that plays a video game well. You are not playing it yourself.
+
+WHAT YOU MUST LEAVE BEHIND
+  ./policy   an executable file, in any language available here.
+
+HOW ./policy IS RUN
+  It is started ONCE and asked for many decisions over stdio.
+  Each request is one JSON object on its own line on stdin:
+      {"schemaVersion":1,"frame":"<the screen>","history":[...],"context":{...}}
+  For each request write ONE line to stdout whose first word is your move.
+  Legal words: ${brief.commands.join(' ')}
+  stdin does NOT close between requests. A program that waits for end-of-input
+  answers nothing and scores nothing.
+  It keeps state across decisions, so it may plan, cache and remember.
+
+HOW TO PRACTISE, RIGHT HERE, NOW
+  This directory is a live practice game. NOTHING HERE IS SCORED.
+    ./${brief.observations}/NNNNNN.json   one file per decision, as it runs
+    ./${brief.latest}                     the newest of those
+    ./${brief.actions}                    append one move per line to act
+  Play it by hand to learn the rules. Reimplement it and test against your copy.
+  Fit weights, search, train something — whatever you think wins.
+
+YOUR GOAL
+  ${goal}, over about ${horizon} decisions per episode.
+  Budget: $${budget}, about ${minutes} minutes. Spend it on building.
+
+HOW YOU ARE SCORED
+  After you stop, ./policy is run cold against a FRESH game in a separate
+  process at full machine speed, and the replay is verified. Your own speed
+  does not matter. Only the program's play does.
+
+Write ./policy early and keep improving it, so a good program exists whatever
+happens to your remaining budget.`
+
+const bin = process.env.PLAYPROOF_CLAUDE_BIN ?? 'claude'
+const agentArgs = [
+  '-p',
+  task,
+  '--permission-mode',
+  'bypassPermissions',
+  '--output-format',
+  'stream-json',
+  '--verbose',
+]
+if (model !== undefined) agentArgs.push('--model', model)
+if (effort !== undefined) agentArgs.push('--effort', effort)
+
+const jail = process.env.PLAYPROOF_JAIL ?? 'on'
+const checkout = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const deny = [checkout, ...(process.env.PLAYPROOF_JAIL_DENY ?? '').split(':')].filter((path) => path !== '')
+
+let command = bin
+let args = agentArgs
+if (jail === 'off') {
+  console.error('playproof: JAIL OFF — this agent can read the grader, so its score proves nothing')
+} else if (platform() === 'darwin') {
+  const home = homedir()
+  const profile = [
+    '(version 1)',
+    '(allow default)',
+    ...deny.map((path) => `(deny file-read* (subpath ${JSON.stringify(path)}))`),
+    `(allow file-read* (subpath ${JSON.stringify(sandbox)}))`,
+    '(deny file-write*)',
+    `(allow file-write* (subpath ${JSON.stringify(sandbox)}))`,
+    `(allow file-write* (subpath ${JSON.stringify(join(home, '.claude'))}))`,
+    `(allow file-write* (subpath ${JSON.stringify(join(home, '.cache'))}))`,
+    `(allow file-write* (subpath ${JSON.stringify(tmpdir())}))`,
+    '(allow file-write* (subpath "/private/tmp"))',
+    '(allow file-write* (subpath "/private/var/folders"))',
+    '(allow file-write-data (subpath "/dev"))',
+  ].join('\n')
+  const profilePath = join(sandbox, '.jail.sb')
+  writeFileSync(profilePath, `${profile}\n`)
+  command = '/usr/bin/sandbox-exec'
+  args = ['-f', profilePath, bin, ...agentArgs]
+} else {
+  console.error(
+    `playproof: no jail implementation for ${platform()}.`
+    + ' Set PLAYPROOF_JAIL=off to run anyway and accept that the score proves nothing.',
+  )
+  process.exit(3)
+}
+
+const costPath = join(sandbox, 'agent-cost.json')
+const transcriptPath = join(sandbox, 'agent-transcript.jsonl')
+let inputTokens = 0
+let outputTokens = 0
+let usd = null
+let turns = 0
+
+function publish() {
+  try {
+    writeFileSync(
+      costPath,
+      `${JSON.stringify({
+        usd,
+        tokens: inputTokens + outputTokens === 0 ? null : inputTokens + outputTokens,
+        inputTokens,
+        outputTokens,
+        turns,
+        vendor: bin,
+        model: model ?? null,
+      })}\n`,
+    )
+  } catch {}
+}
+
+function account(event) {
+  if (event === null || typeof event !== 'object') return
+  if (event.type === 'assistant' || event.type === 'user') turns += 1
+  const usage = event.usage ?? event.message?.usage
+  if (usage !== undefined && usage !== null) {
+    inputTokens
+      += (usage.input_tokens ?? 0)
+      + (usage.cache_read_input_tokens ?? 0)
+      + (usage.cache_creation_input_tokens ?? 0)
+    outputTokens += usage.output_tokens ?? 0
+  }
+  const reported = event.total_cost_usd ?? event.cost_usd
+  if (typeof reported === 'number' && Number.isFinite(reported)) usd = reported
+}
+
+publish()
+
+const child = spawn(command, args, { cwd: sandbox, stdio: ['ignore', 'pipe', 'inherit'] })
+let carry = ''
+child.stdout.setEncoding('utf8')
+child.stdout.on('data', (chunk) => {
+  carry += chunk
+  for (;;) {
+    const at = carry.indexOf('\n')
+    if (at < 0) break
+    const line = carry.slice(0, at)
+    carry = carry.slice(at + 1)
+    if (line.trim() === '') continue
+    try {
+      appendFileSync(transcriptPath, `${line}\n`)
+    } catch {}
+    try {
+      account(JSON.parse(line))
+    } catch {}
+  }
+  publish()
+})
+child.on('error', (error) => {
+  console.error(`playproof: could not start ${bin}: ${error.message}`)
+  process.exit(4)
+})
+child.on('exit', (code, signal) => {
+  publish()
+  process.exit(signal === null ? (code ?? 0) : 1)
+})

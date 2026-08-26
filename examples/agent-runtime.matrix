@@ -1,0 +1,15 @@
+# Several harnesses, one game, one clock. The harness column is what the
+# runtime makes real: these rows differ by the agent that produced them, not
+# only by the model behind it.
+profile.claude-opus  harness=runtime model=claude-opus-5   note=via-tangle-runtime
+profile.codex        harness=runtime model=gpt-5-codex     note=via-tangle-runtime
+profile.masher       harness=none    policy=./runs/smoke/policies/masher.mjs note=free-baseline
+
+game.puzzle adapter=native-2048 target=2048
+
+objective.score goal=maximize:score horizon=200 budgetUsd=2
+
+protocol.det frameskip=1 sticky=0 seeds=1
+sensor.ascii pixels=off channels=-
+
+reps 1

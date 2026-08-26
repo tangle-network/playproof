@@ -860,6 +860,98 @@ reports `deaths: null`, because `0` would claim the run died zero times.
 Playproof prices a decision in dollars through the driver and never sees a token
 count, so `tokens` is `null` too.
 
+### Three transports, and why the choice is a measurement
+
+A profile also states HOW it is asked for a decision. This is not plumbing: it
+changes the number more than the model does.
+
+```
+profile.slow  harness=./harnesses/claude-code model=claude-opus-5 transport=per-decision
+profile.fast  harness=none policy=./policies/greedy             transport=persistent
+profile.live  harness=./harnesses/claude-code model=claude-opus-5 transport=stream \
+              # streaming needs a queue, an empty-queue default and a pace
+```
+
+| transport | shape | measured, native-2048, same program |
+|---|---|---|
+| `per-decision` | one process per decision | 37.29 ms/decision, score **4** |
+| `persistent` | one process per episode, keeps state | 1.28 ms/decision, score **1948** |
+| `stream` | the game writes files, the agent answers asynchronously | — |
+
+Per-decision spawning silently forbids a program from keeping state, so a real
+player degrades to a constant while answering every decision and attesting
+clean. That is why the transport is an axis instead of a default.
+
+**Streaming** writes each observation into a sandbox directory and reads moves
+back from a file, so the agent is never blocked and may use subagents and its
+own scripts. The game does not wait, which forces three declarations:
+
+```
+protocol.async frameskip=1 sticky=0 seeds=1 queue=8 empty=repeat-last pace=1200
+```
+
+`queue` is how many moves may wait, `empty` is what the game does when none is
+(`noop` stops, `repeat-last` keeps going — different games), and `pace` is the
+wall clock one decision takes. **Without a pace, twelve decisions complete in 2
+ms** and any agent with a process to start has lost the episode before printing
+a line; that measures the host's clock speed, not the player. The sandbox
+describes itself in `brief.json` — vocabulary, queue depth, empty-queue rule —
+because an agent that must guess its own vocabulary scores as a bad player.
+
+### Authoring: measure what a profile BUILDS, not how fast it types
+
+Under any live transport an agent's start-up time and typing rate are charged
+against its score. **Measured across nine cells: the rank correlation between
+actions delivered and score was 0.94.** One agent in that study wrote a working
+expectimax searcher and scored 240, because the program was judged on how fast
+its author could type.
+
+`author=` splits the cell in two.
+
+```
+profile.opus harness=./harnesses/claude-code author=./harnesses/author-policy \
+             model=claude-opus-5 buildMin=8 transport=persistent
+```
+
+1. **Build.** The agent gets a practice game streamed into its sandbox, at a
+   *different seed*, scored by nobody, for `buildMin` minutes. It may play it,
+   reimplement it, fit weights or train against it. It must leave an executable
+   `policy` behind.
+2. **Evaluate.** That program runs cold against a fresh scored instance, in a
+   separate process, and the replay is attested. The agent is not running.
+
+Any solution qualifies, because the evaluation only ever sees a program that
+answers decisions over stdio — a heuristic table, a search, weights fitted
+offline, a learned policy. Build cost lands in its own `build` column
+(`usd`, `tokens`, `minutes`) and never in the play score. An agent that leaves
+no policy is **blocked, not scored zero**: building nothing and playing badly
+are different findings.
+
+Streaming an authored policy is refused, because it would put the author's
+clock back into the measurement.
+
+### Several games mean several definitions
+
+Each game names its own score channel and its own seed, so one definition per
+game is the natural unit and the runner pools them.
+
+```
+npx tsx matrix.mts examples/study-2048.matrix examples/study-cartpole.matrix --out runs/study/cells.json
+```
+
+The objective says which channel carries the score and which way is better —
+`goal=maximize:score` for 2048, `goal=maximize:steps` for CartPole — and every
+row records the `scoreField` and `scoreDirection` it used, so a table spanning
+games states what produced each number. A `minimize:` game is oriented before
+correlating; raw, a perfect transfer would report as a perfect inversion.
+
+### Many harnesses through the Tangle runtime
+
+`harness=<launcher>` spawns a program, which makes that axis one vendor wide.
+To put claude-code, codex and opencode in the same table, route profiles
+through a runtime backend instead — `RunCellOptions.driver` is the seam, and
+`examples/agent-runtime-matrix.mts` is the whole integration.
+
 ### The cross-game statistic
 
 `generalization(rows)` is the number a matrix exists to produce: mean pairwise
