@@ -603,8 +603,28 @@ class RetroArch:
         raise RetroArchError('RetroArch never reported PAUSED')
 
     def gap(self):
-        """One run loop iteration with no frame advance."""
-        self.command(GAP_MSG)
+        """One run loop iteration with no frame advance.
+
+        This is a BARRIER, not a courtesy. `FRAMEADVANCE` returns as soon as
+        RetroArch accepts it, so without an intervening run-loop iteration the
+        next advance can be issued while the previous frame is still settling.
+
+        `command` returns None when it gives up, and this return used to be
+        discarded, so a barrier that did not happen looked exactly like one
+        that did. MEASURED: two same-process replays of the same boot state and
+        the same inputs agreed byte for byte to emuFrame 811 and then differed
+        on the channel values at IDENTICAL frame numbers, which is a run loop
+        that did not settle rather than a frame that was miscounted.
+
+        A missed barrier is now a failure with a name, because a replay that
+        diverges silently is worse than one that stops.
+        """
+        if self.command(GAP_MSG) is None:
+            self._alive()
+            raise RetroArchError(
+                'RetroArch stopped answering between frame advances, so the run loop was not'
+                ' synchronised and a replay of this run would not reproduce it.%s'
+                % self._stall_hint())
 
     def advance(self, frames):
         for _ in range(frames):
