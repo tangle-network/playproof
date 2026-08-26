@@ -437,6 +437,51 @@ The hard assertion is the milestone outcome: the contract derived over those cha
 
 Measured over the first 120 inputs of the reference, RetroArch with gambatte against PyBoy's recorded values: **21 of 24 channels agree on 71 to 98 per cent of steps**, 8 of them on 118 of 120. Three do not track: the BCD score word, a 4-byte word, and a low counter, all of which sample values that move within a frame. Wrong addresses or a wrong decode would show as agreement near zero, so the gate asserts that at least half the channels agree on half the steps and prints every figure.
 
+## Deterministic native process
+
+`@tangle-network/playproof/adapters/native-2048` is a complete seeded 2048 implementation in an independent process. It exercises engine, save, event, rendered-frame, checkpoint, frontier-search, replay, and signed-run paths without an emulator dependency.
+
+## Generic native desktop games
+
+```ts
+import { makeNativeDesktopAdapter } from '@tangle-network/playproof/adapters/native-desktop'
+```
+
+A declarative desktop specification can:
+
+- launch directly or attach after launcher handoff;
+- select a spawned process, PID file, named descendant, existing PID, or bounded resolver;
+- send allowlisted inputs through stdin or a helper;
+- observe stdout or a capture helper;
+- collect bounded JSON/binary saves, append-only events, rendered fields, and authorized read-only evidence;
+- pin executables and assets into the game-build digest; and
+- terminate the owned process group and descendants.
+
+A nondeterministic target receives exactly one live pass. Every verifier pass after that replays the immutable recorder transcript and never relaunches the game.
+
+## Game Boy through PyBoy
+
+```ts
+import { makePyBoyGeneric } from '@tangle-network/playproof/adapters/pyboy-generic'
+```
+
+The PyBoy adapter supports deterministic replay, memory snapshots, save states, framebuffer evidence, checkpoint exploration, and blind progression-channel discovery. ROMs are never distributed by Playproof.
+
+`makePyBoyGeneric(rom, doc, { screenImage: true, screenScale: 3 })` also shows the agent the rendered screen. PyBoy's own `screen.image` needs Pillow, which Playproof does not depend on, so the worker encodes the PNG from the raw array itself.
+
+Showing it required a fix first: the wiring ticked the emulator with rendering off, so the framebuffer hash was one constant value for a whole run and the screen-frame milestone was pinned on it. The last frame of each input window now renders, which leaves every privileged variable identical and changes `saveBlobHash`. See [Execution adapters](adapters.md).
+
+The real-emulator regression runs in CI on [Libbet and the Magic Floor](https://github.com/pinobatch/libbet), a free-software Game Boy game whose release ROM the job downloads and verifies by SHA-256 and MD5. `pnpm test:pyboy-libbet` boots the generic adapter from `pyboy/discovery-libbet.json`, replays the reference run, and checks that the derived milestones verify, that two power-on replays produce identical evidence, and that a garbage input script does not. A commercial ROM such as Tetris stays on the release manager's machine, so `pnpm test:pyboy` remains a local gate.
+
+## Steam and Xbox
+
+```ts
+import { SteamWebApiEvidenceSource } from '@tangle-network/playproof/platforms/steam'
+import { XboxRestEvidenceSource } from '@tangle-network/playproof/platforms/xbox'
+```
+
+Platform milestones are evaluated as **baseline-to-final transitions**. An achievement already unlocked before the run or a statistic whose threshold was already crossed receives no credit. Provider, title, user, environment/sandbox, build, response size, pagination, and monotonic-stat invariants fail closed.
+
 ## Candidate adapters
 
 Ordered by how much reach each one buys per unit of work. RetroArch as a black-box host was the first entry here and is now shipped; see [Any RetroArch core](#any-retroarch-core-through-the-black-box-host) above.
