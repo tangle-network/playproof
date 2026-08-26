@@ -1,0 +1,20 @@
+# Three models, one game, one clock. The only thing that varies is the profile,
+# which is what makes the column comparable.
+profile.haiku  harness=./harnesses/claude-code model=claude-haiku-4-5-20251001 transport=stream
+profile.sonnet harness=./harnesses/claude-code model=claude-sonnet-5           transport=stream
+profile.opus   harness=./harnesses/claude-code model=claude-opus-5             transport=stream
+
+game.puzzle adapter=native-2048 target=2048
+
+objective.score goal=maximize:score horizon=120 budgetUsd=3
+
+protocol.async frameskip=1 sticky=0 seeds=1 queue=8 empty=repeat-last pace=1500
+sensor.ascii pixels=off channels=-
+
+reps 1
+
+# Run it:
+#   npx tsx matrix.mts examples/profiles.matrix --out runs/profiles/cells.json
+#
+# Read the transport note as carefully as the score. A cell whose agent never
+# fed the action file scored the empty-queue default, not the model.
