@@ -16,17 +16,30 @@ import { dirname } from 'node:path'
 import { enumerateCells, parseMatrix } from './matrix'
 import { assertJoinable, effectiveArms, generalization, runCell, type CellResult } from './matrix-run'
 
-const [definitionPath, ...rest] = process.argv.slice(2)
-if (definitionPath === undefined) {
-  console.error('usage: tsx matrix.mts <definition.matrix> [--out <path.json>]')
+// SEVERAL definitions, pooled into one study.
+//
+// A transfer statistic needs two games, and two games do not fit one
+// definition: each names its own score channel and its own seed. CartPole is
+// scored on `steps` at the seed its reference was recorded at; 2048 is scored
+// on `score`. Crossing one objective set over both games would spend half the
+// cells scoring a channel the game does not publish. One definition per game,
+// pooled here, is the shape the study already has.
+const argv = process.argv.slice(2)
+const outIndex = argv.indexOf('--out')
+const outPath = outIndex >= 0 ? argv[outIndex + 1] : undefined
+const definitionPaths = argv.filter((arg, at) => arg !== '--out' && at !== outIndex + 1)
+if (definitionPaths.length === 0) {
+  console.error('usage: tsx matrix.mts <definition.matrix> [more.matrix ...] [--out <path.json>]')
   process.exit(2)
 }
-const outIndex = rest.indexOf('--out')
-const outPath = outIndex >= 0 ? rest[outIndex + 1] : undefined
 
-const definition = parseMatrix(await readFile(definitionPath, 'utf8'))
-const cells = enumerateCells(definition)
-console.error(`matrix: ${cells.length} cells from ${definitionPath}`)
+const cells = []
+for (const path of definitionPaths) {
+  const parsed = enumerateCells(parseMatrix(await readFile(path, 'utf8')))
+  console.error(`matrix: ${parsed.length} cells from ${path}`)
+  cells.push(...parsed)
+}
+const definitionPath = definitionPaths.join(' ')
 
 const rows: CellResult[] = []
 for (const [index, cell] of cells.entries()) {

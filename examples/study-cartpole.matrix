@@ -1,0 +1,16 @@
+# The other half. CartPole is scored on `steps`, not `score`, and runs at the
+# seed its bundled reference was recorded at — at any other seed that reference
+# survives too few steps for its own milestones to fire, so the contract will
+# not derive and the cell blocks.
+profile.haiku  harness=./harnesses/claude-code model=claude-haiku-4-5-20251001 transport=stream
+profile.sonnet harness=./harnesses/claude-code model=claude-sonnet-5           transport=stream
+profile.opus   harness=./harnesses/claude-code model=claude-opus-5             transport=stream
+
+game.pole adapter=gymnasium target=CartPole-v1
+
+objective.survive goal=maximize:steps horizon=60 budgetUsd=3
+
+protocol.async frameskip=1 sticky=0 seeds=1 seed0=7 queue=8 empty=repeat-last pace=1200
+sensor.ascii pixels=off channels=-
+
+reps 3

@@ -126,6 +126,17 @@ export interface CellResult {
   tokens: number | null
   /** Dollars the episode reported spending. */
   usd: number | null
+  /**
+   * The evidence channel the score was read from, named by the objective.
+   *
+   * Recorded because it differs BETWEEN GAMES: 2048 publishes `score`, CartPole
+   * publishes `steps`. A study that prints one number per game without saying
+   * which channel produced it is not comparable, and one that reads a single
+   * hardcoded name scores every game that does not publish it as null.
+   */
+  scoreField: string | null
+  /** Which way is better on that channel. A minimize goal ranks inverted. */
+  scoreDirection: 'maximize' | 'minimize' | null
   /** Whether the game declared itself finished. Null when it declares no end. */
   cleared: boolean | null
   /** Milestones the replay reproduced. */
@@ -372,6 +383,10 @@ function blockedResult(cell: MatrixCell, reason: BlockedReason, detail: string, 
     wallMs,
     tokens: null,
     usd: 0,
+    // A blocked cell still states what it WOULD have scored on, so a reader can
+    // see that an excluded row and a played row were aimed at the same channel.
+    scoreField: null,
+    scoreDirection: null,
     cleared: null,
     verified: [],
     milestones: { verified: 0, total: 0 },
@@ -487,10 +502,13 @@ export async function runCell(cell: MatrixCell, options: RunCellOptions = {}): P
     // Read before the driver is closed: closing kills the process that keeps
     // the meter current, and a meter read after that is a meter read too late.
     const meter = meterOf(driver)
+    const goal = parseGoal(cell.objective.goal)
     return {
       ...identity(cell),
       status: 'played',
-      score: lastOf(channel(watched.snapshots, 'score')),
+      score: lastOf(channel(watched.snapshots, goal.field)),
+      scoreField: goal.field,
+      scoreDirection: goal.direction,
       deaths: deathsFrom(watched.snapshots),
       decisions: record.turns,
       emulatorFrames: lastOf(channel(watched.snapshots, 'frameNumber')),
@@ -544,6 +562,20 @@ function closeIfPersistent(driver: AgentDriver): void {
  * claims, and a study that confuses them ranks an unmeasured profile first on
  * efficiency.
  */
+/**
+ * Split `maximize:score` into the channel to read and the way that is better.
+ *
+ * The grammar has always validated this string and then thrown it away: the row
+ * read a channel literally named `score`, so every game that publishes anything
+ * else — CartPole publishes `steps` — scored null and could never be ranked.
+ * That is why a transfer statistic could not be computed across two games.
+ */
+export function parseGoal(goal: string): { direction: 'maximize' | 'minimize'; field: string } {
+  const at = goal.indexOf(':')
+  const direction = goal.slice(0, at) === 'minimize' ? 'minimize' : 'maximize'
+  return { direction, field: goal.slice(at + 1) }
+}
+
 function meterOf(driver: AgentDriver): { metered: boolean; costUsd: number | null; tokens: number | null } {
   const reporter = driver as { health?: () => Record<string, unknown> }
   if (typeof reporter.health !== 'function') return { metered: false, costUsd: null, tokens: null }
@@ -769,9 +801,19 @@ export function generalization(rows: readonly CellResult[], field: keyof CellRes
   }
 
   const mean = (values: readonly number[]): number => values.reduce((a, b) => a + b, 0) / values.length
+  // Orient every game the same way before correlating. A game scored on a
+  // MINIMIZE goal — fewest deaths, fewest tokens — is better when the number is
+  // smaller, and correlating it raw against a maximize game reports the exact
+  // opposite of the truth about whether an order transfers.
+  const orientation = new Map<string, number>()
+  for (const row of rows) {
+    if (row.status !== 'played') continue
+    orientation.set(row.game, row.scoreDirection === 'minimize' ? -1 : 1)
+  }
   const scores = new Map<string, number[]>()
   for (const game of games) {
-    scores.set(game, common.map((profile) => mean(byGame.get(game)!.get(profile)!)))
+    const sign = orientation.get(game) ?? 1
+    scores.set(game, common.map((profile) => sign * mean(byGame.get(game)!.get(profile)!)))
   }
 
   const taus: number[] = []
