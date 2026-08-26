@@ -156,14 +156,25 @@ const refusals: { label: string; text: string; expect: RegExp }[] = [
   {
     label: 'a streaming profile whose protocol never says what acts while it thinks',
     text: DEFINITION.replace('effort=high', 'effort=high transport=stream'),
-    expect: /must state queue=<depth> and empty=noop\|repeat-last, because/u,
+    expect: /must state queue=<depth> and empty=noop\|repeat-last and pace=<ms per decision>, because/u,
   },
   {
     label: 'a streaming profile whose protocol states a queue but no default',
     text: DEFINITION
       .replace('effort=high', 'effort=high transport=stream')
-      .replace('seeds=1', 'seeds=1 queue=8'),
+      .replace('seeds=1', 'seeds=1 queue=8 pace=100'),
     expect: /must state empty=noop\|repeat-last/u,
+  },
+  {
+    // A streamed cell with no pace runs the game as fast as the host can step
+    // it, so an agent with a process to start loses every decision before it
+    // prints a line. That is a measurement of the host, not the player, and it
+    // is refused for the same reason the empty-queue default is.
+    label: 'a streaming profile whose protocol never says how long the agent had to think',
+    text: DEFINITION
+      .replace('effort=high', 'effort=high transport=stream')
+      .replace('seeds=1', 'seeds=1 queue=8 empty=noop'),
+    expect: /must state pace=<ms per decision>/u,
   },
   {
     label: 'an empty-queue default that is neither',
@@ -183,12 +194,12 @@ for (const refusal of refusals) {
 assert.doesNotThrow(() => parseMatrix(DEFINITION), 'the parser must accept the definition the red cases corrupt')
 
 // GREEN for the streaming refusal: once the protocol says what acts while the
-// agent thinks, the same definition parses.
+// agent thinks and how long it had to think, the same definition parses.
 assert.doesNotThrow(
   () => parseMatrix(
     DEFINITION
       .replace('effort=high', 'effort=high transport=stream')
-      .replace('seeds=1', 'seeds=1 queue=8 empty=repeat-last'),
+      .replace('seeds=1', 'seeds=1 queue=8 empty=repeat-last pace=700'),
   ),
   'a streaming profile must be accepted once its protocol declares the queue and the default',
 )
@@ -199,7 +210,7 @@ assert.doesNotThrow(
 {
   const streamed = (empty: string): string => DEFINITION
     .replace('effort=high', 'effort=high transport=stream')
-    .replace('seeds=1', `seeds=1 queue=8 empty=${empty}`)
+    .replace('seeds=1', `seeds=1 queue=8 empty=${empty} pace=700`)
   assert.notEqual(
     cellId(enumerateCells(parseMatrix(streamed('noop')))[0]!),
     cellId(enumerateCells(parseMatrix(streamed('repeat-last')))[0]!),

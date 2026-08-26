@@ -42,6 +42,7 @@ import {
   type MatrixCell,
   type MatrixDefinition,
   type MatrixGame,
+  type MatrixObjective,
   type MatrixProfile,
   type MatrixProtocol,
   type MatrixSensor,
@@ -124,7 +125,7 @@ export interface CellResult {
    */
   tokens: number | null
   /** Dollars the episode reported spending. */
-  usd: number
+  usd: number | null
   /** Whether the game declared itself finished. Null when it declares no end. */
   cleared: boolean | null
   /** Milestones the replay reproduced. */
@@ -168,6 +169,7 @@ export function driverFor(
   sensor?: MatrixSensor,
   protocol?: MatrixProtocol,
   streamDir?: string,
+  objective?: MatrixObjective,
 ): AgentDriver {
   // A control is a local executable that costs nothing. `fixedCostUsd: 0` is
   // the explicit statement that this arm is free, which both drivers demand
@@ -182,10 +184,11 @@ export function driverFor(
     if (streamDir === undefined) {
       throw new Error(`profile.${profile.id} streams, so it needs a sandbox directory to stream into`)
     }
-    if (protocol?.queue == null || protocol.whenEmpty == null) {
+    if (protocol?.queue == null || protocol.whenEmpty == null || protocol.paceMs == null) {
       throw new Error(
-        `profile.${profile.id} streams, so its protocol must state queue and empty`
-        + ' — the game decides what acts while the agent thinks, and that is part of the measurement',
+        `profile.${profile.id} streams, so its protocol must state queue, empty and pace`
+        + ' — the game decides what acts while the agent thinks and how long it had to think,'
+        + ' and both are part of the measurement',
       )
     }
     return createStreamSandboxDriver({
@@ -193,8 +196,23 @@ export function driverFor(
       commands,
       queueDepth: protocol.queue,
       whenEmpty: protocol.whenEmpty,
+      ...(protocol.paceMs === null ? {} : { paceMs: protocol.paceMs }),
       ...(vision ? { vision } : {}),
       fixedCostUsd: 0,
+      // An agent started in a directory of observation files has been told the
+      // controls by `brief.json` and nothing else. What it is being ASKED to do
+      // lives in the objective, so it travels with the process. Omitted rather
+      // than defaulted when there is no objective: an invented goal would be a
+      // silent change to what the cell measures.
+      ...(objective === undefined
+        ? {}
+        : {
+            env: {
+              PLAYPROOF_GOAL: objective.goal,
+              PLAYPROOF_HORIZON: String(objective.horizon),
+              PLAYPROOF_SPEND_CEILING: String(objective.budgetUsd),
+            },
+          }),
       // The sandbox is the agent's working directory, so a relative program
       // path in the definition would resolve against the sandbox and silently
       // fail to start. It is resolved against the caller's directory, which is
@@ -397,6 +415,7 @@ export interface RunCellOptions {
     sensor: MatrixSensor,
     protocol: MatrixProtocol,
     streamDir: string,
+    objective: MatrixObjective,
   ) => AgentDriver
   /** Where a streaming profile's sandbox is made. Defaults to a temp directory. */
   streamRoot?: string
@@ -429,7 +448,14 @@ export async function runCell(cell: MatrixCell, options: RunCellOptions = {}): P
   try {
     let driver: AgentDriver
     try {
-      driver = makeDriver(cell.profile, built.commands, cell.sensor, cell.protocol, streamDir(cell, options))
+      driver = makeDriver(
+        cell.profile,
+        built.commands,
+        cell.sensor,
+        cell.protocol,
+        streamDir(cell, options),
+        cell.objective,
+      )
     } catch (error) {
       return blockedResult(cell, 'driver-unusable', (error as Error).message, now() - started)
     }
@@ -458,6 +484,9 @@ export async function runCell(cell: MatrixCell, options: RunCellOptions = {}): P
       return blockedResult(cell, 'episode-failed', (error as Error).message, now() - started)
     }
 
+    // Read before the driver is closed: closing kills the process that keeps
+    // the meter current, and a meter read after that is a meter read too late.
+    const meter = meterOf(driver)
     return {
       ...identity(cell),
       status: 'played',
@@ -466,8 +495,10 @@ export async function runCell(cell: MatrixCell, options: RunCellOptions = {}): P
       decisions: record.turns,
       emulatorFrames: lastOf(channel(watched.snapshots, 'frameNumber')),
       wallMs: now() - started,
-      tokens: null,
-      usd: record.spentUsd,
+      // An unmetered arm reports null, never zero: a study that reads them the
+      // same ranks the profile nobody metered first on cost per point.
+      tokens: meter.tokens,
+      usd: meter.metered && meter.costUsd === null ? null : (meter.costUsd ?? 0) + record.spentUsd,
       cleared: record.gameOver,
       verified: record.verified,
       milestones: record.score,
@@ -499,6 +530,28 @@ function closeIfPersistent(driver: AgentDriver): void {
  * null rather than an empty string, so a reader can tell "nothing to report"
  * from "reported nothing".
  */
+/**
+ * What the transport says the agent spent.
+ *
+ * A transport with no meter reports nothing, and nothing stays NULL rather than
+ * becoming zero: an arm nobody metered and an arm that was free are different
+ * claims, and a study that confuses them ranks an unmeasured profile first on
+ * efficiency.
+ */
+function meterOf(driver: AgentDriver): { metered: boolean; costUsd: number | null; tokens: number | null } {
+  const reporter = driver as { health?: () => Record<string, unknown> }
+  if (typeof reporter.health !== 'function') return { metered: false, costUsd: null, tokens: null }
+  const health = reporter.health()
+  // `metered` asks whether this transport HAS a cost channel, which is a
+  // different question from whether anything came down it. A per-decision
+  // control that declares `fixedCostUsd: 0` is genuinely free and must total
+  // zero; only a transport that owns a meter can report the absence of one.
+  if (!('costUsd' in health)) return { metered: false, costUsd: null, tokens: null }
+  const nonNegative = (value: unknown): number | null =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+  return { metered: true, costUsd: nonNegative(health.costUsd), tokens: nonNegative(health.tokens) }
+}
+
 function transportNoteOf(driver: AgentDriver): string | null {
   const reporter = driver as { health?: () => Record<string, unknown> }
   if (typeof reporter.health !== 'function') return null
@@ -512,11 +565,17 @@ function transportNoteOf(driver: AgentDriver): string | null {
   if (typeof endReason === 'string') {
     return `session ${endReason}${typeof health.detail === 'string' ? `: ${health.detail}` : ''}`
   }
+  const parts: string[] = []
   const starved = health.starved
-  if (typeof starved === 'number' && starved > 0) {
-    return `${starved} decisions took the empty-queue default`
-  }
-  return null
+  if (typeof starved === 'number' && starved > 0) parts.push(`${starved} decisions took the empty-queue default`)
+  // Reported beside the starvation it explains. A rewritten action file used to
+  // silence the agent outright, so a reader who sees both numbers can tell an
+  // agent that stopped playing from one that keeps a rolling plan.
+  const rewrites = health.rewrites
+  if (typeof rewrites === 'number' && rewrites > 0) parts.push(`${rewrites} action-file rewrites`)
+  const overrun = health.overrun
+  if (typeof overrun === 'number' && overrun > 0) parts.push(`${overrun} decisions ran late of the pace`)
+  return parts.length > 0 ? parts.join('; ') : null
 }
 
 /** Run every cell a definition denotes, in the definition's own order. */

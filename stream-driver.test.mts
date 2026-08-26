@@ -9,7 +9,7 @@
  * the option would be decoration.
  */
 import { strict as assert } from 'node:assert'
-import { appendFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createStreamSandboxDriver } from './drivers/stream-sandbox'
@@ -265,8 +265,104 @@ assert.throws(
   'an unpriced stream must be refused rather than reporting a zero nobody measured',
 )
 
+// ---- The sandbox describes itself ------------------------------------------
+
+{
+  // An agent started in a directory of observations must be told the control
+  // scheme, or the words it guesses become rejected lines and read in the
+  // health record as bad play rather than as a player nobody told the rules.
+  const driver = sandbox({ queueDepth: 3, whenEmpty: 'repeat-last' })
+  try {
+    const brief = JSON.parse(readFileSync(join(driver.dir, 'brief.json'), 'utf8')) as Record<string, unknown>
+    assert.deepEqual(brief.commands, [...COMMANDS], 'the brief must state the vocabulary the game accepts')
+    assert.equal(brief.queueDepth, 3)
+    assert.equal(brief.whenEmpty, 'repeat-last')
+    assert.equal(brief.actions, 'actions', 'the brief must name the file the agent writes to')
+  } finally {
+    driver.close()
+  }
+}
+
+// ---- Wall clock is the asynchronous agent's whole budget --------------------
+
+{
+  // RED without the pace: 12 decisions complete in about a millisecond, so a
+  // player with a process to start has lost the episode before it printed a
+  // line. That measures the host's clock speed, not the player.
+  const driver = createStreamSandboxDriver({
+    dir: join(root, 'paced'),
+    commands: COMMANDS,
+    queueDepth: 4,
+    whenEmpty: 'noop',
+    fixedCostUsd: 0,
+    paceMs: 40,
+  })
+  try {
+    const started = Date.now()
+    for (let turn = 1; turn <= 12; turn += 1) await driver.act(`frame ${turn}`, [], context(turn))
+    const elapsed = Date.now() - started
+    // Eleven gaps between twelve decisions, and the first is due immediately.
+    assert.ok(elapsed >= 400, `a paced game must hold its rate, took ${elapsed}ms for 12 at 40ms`)
+    assert.ok(elapsed < 2000, `the pace must not compound, took ${elapsed}ms`)
+  } finally {
+    driver.close()
+  }
+}
+
+// ---- An unmetered agent costs null, never zero -----------------------------
+
+{
+  // This transport cannot bracket a call to meter it: the agent answers into a
+  // file on its own clock. The only honest source is the agent's own report,
+  // and its ABSENCE must stay absent — a free arm and an unmetered one look
+  // identical in a total, and only one of them is a result.
+  const driver = sandbox({ queueDepth: 2, whenEmpty: 'noop' })
+  try {
+    assert.equal(driver.health().costUsd, null, 'an agent that reported no cost must not be recorded as free')
+    assert.equal(driver.health().tokens, null)
+    writeFileSync(join(driver.dir, 'agent-cost.json'), JSON.stringify({ usd: 0.42, tokens: 1234 }))
+    assert.equal(driver.health().costUsd, 0.42, 'a reported cost must be read back')
+    assert.equal(driver.health().tokens, 1234)
+    writeFileSync(join(driver.dir, 'agent-cost.json'), JSON.stringify({ usd: -1, tokens: 'many' }))
+    assert.equal(driver.health().costUsd, null, 'a nonsensical cost is no cost, not a negative one')
+    assert.equal(driver.health().tokens, null)
+  } finally {
+    driver.close()
+  }
+}
+
+// ---- An agent that rewrites its action file is not a silent agent ----------
+
+{
+  // RED before the truncation check: the offset sits past the end of a shorter
+  // file, every later read returns nothing, and the driver is deaf for the rest
+  // of the episode while the health record blames the player. Measured on the
+  // first cell this transport ever played, whose agent wrote itself a
+  // controller that kept the last eight actions with `open(path, 'w')`.
+  const driver = sandbox({ queueDepth: 4, whenEmpty: 'noop' })
+  const actions = join(driver.dir, 'actions')
+  try {
+    appendFileSync(actions, 'up\nup\nup\n')
+    assert.equal((await driver.act('f1', [], context(1))).input, 'up')
+    assert.equal((await driver.act('f2', [], context(2))).input, 'up')
+    // The agent rewrites rather than appends, and the file gets shorter.
+    writeFileSync(actions, 'down\n')
+    assert.equal(
+      (await driver.act('f3', [], context(3))).input,
+      'down',
+      'an agent that rewrites its action file must still be heard',
+    )
+    assert.equal(driver.health().rewrites, 1, 'the rewrite must be counted, not hidden')
+    assert.equal(driver.health().starved, 0, 'a rewritten file must not be reported as a player that stopped playing')
+  } finally {
+    driver.close()
+  }
+}
+
 rmSync(root, { recursive: true, force: true })
 console.log(
   'playproof stream sandbox: the game never waits, the queue is consumed one action per decision,'
-  + ' a full queue drops the newest, and noop and repeat-last produce different episodes',
+  + ' a full queue drops the newest, noop and repeat-last produce different episodes,'
+  + ' the pace is held, the sandbox describes itself, an unmetered agent costs null,'
+  + ' and an agent that rewrites its action file is still heard',
 )

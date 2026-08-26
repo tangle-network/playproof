@@ -1,0 +1,21 @@
+# The first cell in this repo played by a real coding agent rather than a
+# program someone wrote for it. One profile, one game, one clock.
+profile.haiku harness=./harnesses/claude-code model=claude-haiku-4-5-20251001 transport=stream
+
+game.puzzle adapter=native-2048 target=2048
+
+objective.score goal=maximize:score horizon=120 budgetUsd=1
+
+# pace: the game takes a decision every 1500ms whatever the agent is doing, so
+# the episode is ~180s of wall clock and the agent's speed is part of its score.
+protocol.async frameskip=1 sticky=0 seeds=1 queue=8 empty=repeat-last pace=1500
+sensor.ascii pixels=off channels=-
+
+reps 1
+
+# Run it:
+#   npx tsx matrix.mts examples/real-agent.matrix --out runs/first/cells.json
+#
+# The launcher jails the agent with sandbox-exec so it cannot read this
+# checkout, which is where the contract and the attestation live. An agent that
+# reads those is not playing the game.
