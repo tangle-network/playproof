@@ -15,7 +15,7 @@ means.
 ### Add a game
 
 A game is one line naming the adapter that boots it and the target that adapter
-takes — an `ale-py` ROM id, a Gymnasium environment id, a stable-retro game.
+takes: an `ale-py` ROM id, a Gymnasium environment id, a stable-retro game.
 
 ```
 game.breakout adapter=ale           target=breakout
@@ -53,15 +53,15 @@ axis rather than a fixed cost:
 | `persistent` (default) | one child process per episode, request/response over stdio | 0.97 ms a decision, 38x less; state survives |
 | `stream` | the game writes observations into a sandbox directory and never waits; the agent appends actions to a file | the agent's thinking rate is decoupled from the frame rate |
 
-`stream` is the asynchronous one. The agent reads when it likes — with as many
-subagents and analysis scripts as it wants — and the game consumes one queued
+`stream` is the asynchronous one. The agent reads when it likes, with as many
+subagents and analysis scripts as it wants, and the game consumes one queued
 action per decision. It holds no emulator handle, so there is no object graph to
 isolate: the boundary is the filesystem.
 
 ### Define a matrix
 
 ```
-# study.matrix — two arms, two games, one protocol, one sensor
+# study.matrix: two arms, two games, one protocol, one sensor
 profile.opus   harness=claude-code model=claude-opus-5 effort=high
 profile.chaser harness=none policy=./policies/chaser
 
@@ -89,7 +89,7 @@ are different games.
 
 **The sensor states what the agent may see.** `pixels=on scale=N` publishes the
 rendered screen next to the text frame. `channels=ball_x@99,paddle_x@72` names
-RAM bytes — a *harness* channel that reaches milestones and the result vector,
+RAM bytes. That is a *harness* channel, which reaches milestones and the result vector,
 never the agent, because routing it to the agent would cross the one boundary
 playproof exists to hold.
 
@@ -112,7 +112,7 @@ tsx matrix.mts study.matrix --out runs/study/cells.json
 
 Each cell prints a line as it finishes, and the artifact holds every row plus
 the summary. A cell whose game cannot be built under its own protocol is a
-**blocked** row carrying the reason — never a zero, because a profile that never
+**blocked** row carrying the reason, never a zero, because a profile that never
 played did not lose.
 
 That case is real, not defensive. The bundled Breakout reference is recorded at
@@ -242,7 +242,7 @@ backend. `RunCellOptions.driver` is the seam. See
 ### The cross-game statistic
 
 `generalization(rows)` is the number a matrix exists to produce: mean pairwise
-Kendall tau-b between per-game rankings. It reports its own limits beside it —
+Kendall tau-b between per-game rankings. It reports its own limits beside it:
 `folds` (games, not pairs), `effectiveArms` against `declaredArms`, and every
 excluded cell.
 

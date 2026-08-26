@@ -65,7 +65,7 @@ It is off by default on every adapter, so a run that does not ask for it sends t
 | `platforms/steam`, `platforms/xbox` | No | The title runs elsewhere; these adapters provide no observation at all | — |
 
 **No image dependency was added, and none may be.**
-Pillow is absent from the CI environments — the PyBoy job logs `Missing dependency "Pillow"` — and a harness that grows an imaging stack to show a game screen has overpaid.
+Pillow is absent from the CI environments; the PyBoy job logs `Missing dependency "Pillow"`. A harness that grows an imaging stack to show a game screen has overpaid.
 `pyshared/playproof_png.py` encodes 8-bit grayscale, RGB, or RGBA with `zlib` and `struct`, filter 0 on every scanline.
 Measured on an ale-py 0.12.1 Breakout frame: 518 bytes at the native 160x210 in 0.84 ms, and 2,383 bytes at a 3x upscale in 4.4 ms.
 
@@ -83,7 +83,7 @@ Its environments here observe a vector or an `ansi` string rather than a framebu
 That is a new dependency for a picture of a cart and a pole, so the adapter does without and says so.
 
 Each gate proves the identity rather than the plumbing: it undoes the whole-pixel upscale, hashes the recovered native buffer, and asserts it equals the `frameHash` a verifier recomputes.
-Measured on CI hardware — ALE Breakout at 3x: a 480x630 PNG of 2,488 bytes with 9 distinct colours; stable-retro Airstriker at 2x: 640x448, 1,968 bytes, 9 colours; PyBoy Libbet at 3x: 480x432, 1,228 bytes, 1 colour, because Libbet under the blind generic preamble draws an all-white screen from about the fortieth reference input onward.
+Measured on CI hardware. ALE Breakout at 3x: a 480x630 PNG of 2,488 bytes with 9 distinct colours; stable-retro Airstriker at 2x: 640x448, 1,968 bytes, 9 colours; PyBoy Libbet at 3x: 480x432, 1,228 bytes, 1 colour, because Libbet under the blind generic preamble draws an all-white screen from about the fortieth reference input onward.
 
 **The pixels are observation, never evidence.**
 They do not enter the input log, the contract, or the attestation, and an adapter that put privileged state into an image caption would be breaking the same boundary that already forbids putting it into the frame text.
@@ -275,7 +275,7 @@ The gate in `ale.test.mts` decodes the produced PNG, checks the dimensions and t
 **Contracts.** A reference file declares the trigger for each milestone.
 `deriveContract` replays the reference and samples the value or hash that actually held at that instant.
 No threshold or hash is written by hand.
-The bundled Breakout contract is seven rungs of one progression — `score >= 1, 2, 4, 8, 18, 32, 64` — so a run that broke 24 bricks and one that broke 64 do not score the same.
+The bundled Breakout contract is seven rungs of one progression (`score >= 1, 2, 4, 8, 18, 32, 64`), so a run that broke 24 bricks and one that broke 64 do not score the same.
 
 **ROMs.** `ale-py` bundles the Atari ROM set, so this adapter needs no download and no secret.
 The bundled reference plays Breakout and reaches a score of 64 over 839 inputs, which opens all seven rungs of the packaged ladder.
@@ -311,7 +311,7 @@ That is a new dependency for a picture of a cart and a pole, so this adapter pub
 A toy-text `ansi` render marks the agent's own cell with a terminal colour escape and nothing else, so the worker converts the highlight to brackets before it strips the escapes; dropping them outright would delete the agent's position from the frame.
 
 **Evidence.** `engineState` carries `cumulativeReward`, `steps`, `terminated`, `truncated`, and the numeric entries of the environment's `info` dictionary, bounded to the first 16.
-`frameHash` is the SHA-256 of the whole observation — over its dtype, shape, and raw bytes for a dense array, and over its canonical JSON otherwise — and `frameState` carries the first 8 observation components.
+`frameHash` is the SHA-256 of the whole observation, taken over its dtype, shape and raw bytes for a dense array, and over its canonical JSON otherwise. `frameState` carries the first 8 observation components.
 Playproof evidence is integer-only, so reward, numeric `info` entries, and observation components are multiplied by 1000 and rounded.
 Reward 1.0 is `cumulativeReward` 1000.
 `steps`, `terminated`, and `truncated` are counts and flags and are never scaled.
@@ -328,14 +328,14 @@ What is lost is the ability to surprise the agent with a progress signal it coul
 `gymnasium.test.mts` measures both across separate worker processes rather than assuming them.
 An environment that reads a clock, a global RNG, or external state is not replay-verifiable and must not be given a contract.
 
-**Checkpoints.** Gymnasium exposes no generic state API, so the general checkpoint is `{seed, inputs}` and restore is `reset(seed)` followed by a replay — exact for the environments above, and the only sound answer for the rest.
+**Checkpoints.** Gymnasium exposes no generic state API, so the general checkpoint is `{seed, inputs}` and restore is `reset(seed)` followed by a replay. That is exact for the environments above, and the only sound answer for the rest.
 Where the environment keeps its position in one readable attribute (`state` for classic control, `s` for toy text), the worker also writes a JSON copy of that attribute, and restore puts it back directly instead of replaying.
 `pickle` is never used: a checkpoint stays a plain protocol value a verifier can read.
 The fast path is exact for environments whose `step` is a deterministic function of that attribute; `GymRpc.snapshot('replay')` forces the general path, and the gate proves both.
 
 **Contracts.** A reference file declares the trigger for each milestone; `deriveContract` replays the reference and samples the value or hash that actually held at that instant.
 No threshold or hash is written by hand.
-Playproof ships two reference playthroughs — a scripted balancing run on `CartPole-v1` and the shortest winning path on the `FrozenLake-v1` 4x4 map.
+Playproof ships two reference playthroughs: a scripted balancing run on `CartPole-v1`, and the shortest winning path on the `FrozenLake-v1` 4x4 map.
 Both environments are part of Gymnasium itself, so the adapter and its gate run on a clean CI machine with no asset:
 
 ```bash
@@ -376,7 +376,7 @@ RetroArch is not an API, so each of these is a measurement against the real bina
 
 ### Determinism
 
-Libretro cores take no seed, so `init(seed)` cannot rebuild a run the way a seeded environment can. Instead the worker pins a boot state — pause, `RESET`, `bootFrames` fixed advances, save state — and `init` restores it. Every later transition is an explicit, counted frame advance from that state, so the input log plus the boot state is the complete determinism key. The seed is recorded and reported so run artifacts keep one shape, but it is nominal.
+Libretro cores take no seed, so `init(seed)` cannot rebuild a run the way a seeded environment can. Instead the worker pins a boot state (pause, `RESET`, `bootFrames` fixed advances, save state), and `init` restores it. Every later transition is an explicit, counted frame advance from that state, so the input log plus the boot state is the complete determinism key. The seed is recorded and reported so run artifacts keep one shape, but it is nominal.
 
 The result of that procedure is saved once, and every reset restores the save. Re-running the reset instead is not equivalent: a core reset does not clear video memory or the picture-processing state, so a second reset lands the title-screen animation at a phase that depends on the run before it. Measured over 41 evidence snapshots between two separately launched emulators, re-running the reset reproduced work RAM 40 times and the screen twice, while restoring the pinned save reproduced work RAM every time.
 
@@ -431,7 +431,7 @@ macOS is not a supported host for this adapter. See the measured-facts table abo
 
 ### The cross-emulator proof
 
-The gate does not merely run a Game Boy game. It replays the 266-input reference from `pyboy/discovery-libbet.json` — whose channel addresses a blind search found by watching **PyBoy's** work RAM — through RetroArch and gambatte, software that shares no code with PyBoy. `channelsFromDiscovery` converts the discovered addresses into RetroArch channels, so one discovery document drives two unrelated emulators and neither adapter carries a hand-copied address.
+The gate does not merely run a Game Boy game. It replays the 266-input reference from `pyboy/discovery-libbet.json` through RetroArch and gambatte, software that shares no code with PyBoy. A blind search found that reference's channel addresses by watching **PyBoy's** work RAM. `channelsFromDiscovery` converts the discovered addresses into RetroArch channels, so one discovery document drives two unrelated emulators and neither adapter carries a hand-copied address.
 
 The hard assertion is the milestone outcome: the contract derived over those channels verifies clean through RetroArch, and a script of the same length that never presses a button is rejected. Per-step channel agreement with PyBoy's own recorded values is reported rather than required to be exact, because two emulators put frame boundaries in different places and a channel that samples an animation disagrees on the steps around each transition.
 
@@ -486,7 +486,7 @@ Platform milestones are evaluated as **baseline-to-final transitions**. An achie
 
 Ordered by how much reach each one buys per unit of work. RetroArch as a black-box host was the first entry here and is now shipped; see [Any RetroArch core](#any-retroarch-core-through-the-black-box-host) above.
 
-**Direct libretro core loader over `ctypes`.** stable-retro compiles a fixed set of cores into its own binary. Loading `libretro.so` cores directly through the C ABI turns the ceiling into "any core that exists": N64 through Mupen64Plus, DS through melonDS, PS1 through Beetle PSX or PCSX-ReARMed, PSP through PPSSPP, 3DS, arcade through MAME or FinalBurn Neo, DOS through DOSBox, and adventure games through ScummVM. The libretro ABI already exposes exactly what Playproof needs — `retro_run`, `retro_serialize`, `retro_unserialize`, `retro_get_memory_data`, and a fixed input descriptor — so this should be **one** worker with a per-core manifest declaring the memory map, the button layout, and the save-state stability the core actually offers. Each new core becomes a data file, not code. The determinism question above must be answered per core: several of these are known to be non-reproducible across processes and would honestly be `trusted-recorder`.
+**Direct libretro core loader over `ctypes`.** stable-retro compiles a fixed set of cores into its own binary. Loading `libretro.so` cores directly through the C ABI turns the ceiling into "any core that exists": N64 through Mupen64Plus, DS through melonDS, PS1 through Beetle PSX or PCSX-ReARMed, PSP through PPSSPP, 3DS, arcade through MAME or FinalBurn Neo, DOS through DOSBox, and adventure games through ScummVM. The libretro ABI already exposes exactly what Playproof needs: `retro_run`, `retro_serialize`, `retro_unserialize`, `retro_get_memory_data`, and a fixed input descriptor. So this should be **one** worker with a per-core manifest declaring the memory map, the button layout, and the save-state stability the core actually offers. Each new core becomes a data file, not code. The determinism question above must be answered per core: several of these are known to be non-reproducible across processes and would honestly be `trusted-recorder`.
 
 **Dolphin (GameCube and Wii).** Reachable through the scripting fork's Lua and Python bindings, which expose memory reads and save states. High value because it opens a console generation nothing else here covers, and high cost because its determinism story is weak and it would likely declare `trusted-recorder`.
 
