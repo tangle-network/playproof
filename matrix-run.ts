@@ -565,11 +565,17 @@ function transportNoteOf(driver: AgentDriver): string | null {
   if (typeof endReason === 'string') {
     return `session ${endReason}${typeof health.detail === 'string' ? `: ${health.detail}` : ''}`
   }
+  const parts: string[] = []
   const starved = health.starved
-  if (typeof starved === 'number' && starved > 0) {
-    return `${starved} decisions took the empty-queue default`
-  }
-  return null
+  if (typeof starved === 'number' && starved > 0) parts.push(`${starved} decisions took the empty-queue default`)
+  // Reported beside the starvation it explains. A rewritten action file used to
+  // silence the agent outright, so a reader who sees both numbers can tell an
+  // agent that stopped playing from one that keeps a rolling plan.
+  const rewrites = health.rewrites
+  if (typeof rewrites === 'number' && rewrites > 0) parts.push(`${rewrites} action-file rewrites`)
+  const overrun = health.overrun
+  if (typeof overrun === 'number' && overrun > 0) parts.push(`${overrun} decisions ran late of the pace`)
+  return parts.length > 0 ? parts.join('; ') : null
 }
 
 /** Run every cell a definition denotes, in the definition's own order. */

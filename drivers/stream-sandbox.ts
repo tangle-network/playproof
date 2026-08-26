@@ -70,7 +70,7 @@
  *   PLAYPROOF_STREAM_ACTIONS  action file name inside the sandbox (default actions)
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdirSync, openSync, readFileSync, readSync, writeFileSync, closeSync, existsSync } from 'node:fs'
+import { fstatSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync, closeSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentDriver } from '../episode'
 import type { Observation } from '../runtime'
@@ -94,6 +94,12 @@ export interface StreamHealth {
   rejected: number
   /** Deepest the queue ever got. */
   peakQueue: number
+  /**
+   * Times the action file got shorter, meaning the agent rewrote it rather than
+   * appending. Recovered from, and counted so a reader can tell an agent that
+   * rewrites from one that appends.
+   */
+  rewrites: number
   /**
    * Decisions the game was already late for when they came due.
    *
@@ -243,6 +249,8 @@ export function createStreamSandboxDriver(options: StreamSandboxDriverOptions): 
   let dueAt: number | null = null
   /** Decisions the game was already late for, so the pace was not held. */
   let overrun = 0
+  /** Times the agent rewrote the action file instead of appending to it. */
+  let rewrites = 0
 
   if (options.command !== undefined) {
     const started = spawn(options.command, [...(options.args ?? [])], {
@@ -298,7 +306,24 @@ export function createStreamSandboxDriver(options: StreamSandboxDriverOptions): 
     child = started
   }
 
-  /** Read whatever the agent has appended since the last decision. */
+  /**
+   * Read whatever the agent has put in the action file since the last decision.
+   *
+   * The file is read forward from a byte offset, which assumes the agent only
+   * ever APPENDS. A real agent does not: measured on the first cell this
+   * transport ever played, the player wrote itself a controller that kept the
+   * last eight actions with `open(path, 'w')`, truncating the file on every
+   * pass. The offset then sat past the end of a shorter file, every later read
+   * returned nothing, and the driver was deaf for the rest of the episode while
+   * the health record said 112 starved decisions — which reads as a player that
+   * played badly rather than a channel that broke.
+   *
+   * Rewriting a queue file to hold the last few entries is an ordinary thing to
+   * do, so it is HANDLED rather than forbidden: a file shorter than the offset
+   * has been rewritten, and its whole contents replace what was pending. The
+   * rewrite is counted, because an agent that rewrites and one that appends are
+   * playing differently and a reader should be able to tell.
+   */
   const drainActions = (): void => {
     let fd: number
     try {
@@ -307,6 +332,20 @@ export function createStreamSandboxDriver(options: StreamSandboxDriverOptions): 
       return
     }
     try {
+      // Checked before reading, so a truncation is noticed on the pass that
+      // follows it rather than never.
+      const size = fstatSync(fd).size
+      if (size < offset) {
+        rewrites += 1
+        offset = 0
+        carry = ''
+        // The queue goes with it. A rewrite is the agent saying THIS IS MY PLAN
+        // NOW, so keeping what it wrote earlier would splice a stale intention
+        // in front of a current one. That is the opposite of the reason a full
+        // queue drops the newest: there the earlier action is still the agent's
+        // own standing decision, here the agent has just replaced it.
+        queue.length = 0
+      }
       const buffer = Buffer.alloc(64 * 1024)
       for (;;) {
         const read = readSync(fd, buffer, 0, buffer.length, offset)
@@ -423,6 +462,7 @@ export function createStreamSandboxDriver(options: StreamSandboxDriverOptions): 
       rejected,
       peakQueue,
       overrun,
+      rewrites,
       agent,
       agentDetail,
       ...reportedMeter(),

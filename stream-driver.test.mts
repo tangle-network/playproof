@@ -331,9 +331,38 @@ assert.throws(
   }
 }
 
+// ---- An agent that rewrites its action file is not a silent agent ----------
+
+{
+  // RED before the truncation check: the offset sits past the end of a shorter
+  // file, every later read returns nothing, and the driver is deaf for the rest
+  // of the episode while the health record blames the player. Measured on the
+  // first cell this transport ever played, whose agent wrote itself a
+  // controller that kept the last eight actions with `open(path, 'w')`.
+  const driver = sandbox({ queueDepth: 4, whenEmpty: 'noop' })
+  const actions = join(driver.dir, 'actions')
+  try {
+    appendFileSync(actions, 'up\nup\nup\n')
+    assert.equal((await driver.act('f1', [], context(1))).input, 'up')
+    assert.equal((await driver.act('f2', [], context(2))).input, 'up')
+    // The agent rewrites rather than appends, and the file gets shorter.
+    writeFileSync(actions, 'down\n')
+    assert.equal(
+      (await driver.act('f3', [], context(3))).input,
+      'down',
+      'an agent that rewrites its action file must still be heard',
+    )
+    assert.equal(driver.health().rewrites, 1, 'the rewrite must be counted, not hidden')
+    assert.equal(driver.health().starved, 0, 'a rewritten file must not be reported as a player that stopped playing')
+  } finally {
+    driver.close()
+  }
+}
+
 rmSync(root, { recursive: true, force: true })
 console.log(
   'playproof stream sandbox: the game never waits, the queue is consumed one action per decision,'
   + ' a full queue drops the newest, noop and repeat-last produce different episodes,'
-  + ' the pace is held, the sandbox describes itself, and an unmetered agent costs null',
+  + ' the pace is held, the sandbox describes itself, an unmetered agent costs null,'
+  + ' and an agent that rewrites its action file is still heard',
 )
