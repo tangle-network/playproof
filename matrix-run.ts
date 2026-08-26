@@ -529,6 +529,12 @@ function closeIfPersistent(driver: AgentDriver): void {
  * Read before the driver is closed. A transport that reports nothing returns
  * null rather than an empty string, so a reader can tell "nothing to report"
  * from "reported nothing".
+ *
+ * Every fact it holds is JOINED, never substituted. The fate of the agent used
+ * to return early and hide the starvation count behind it. Measured on the
+ * first three-profile comparison this repo ran: the one arm whose agent
+ * finished was the one arm whose starvation nobody could read — an asymmetry
+ * between compared arms produced by the reporting rather than by the run.
  */
 /**
  * What the transport says the agent spent.
@@ -556,16 +562,16 @@ function transportNoteOf(driver: AgentDriver): string | null {
   const reporter = driver as { health?: () => Record<string, unknown> }
   if (typeof reporter.health !== 'function') return null
   const health = reporter.health()
+  const parts: string[] = []
   const agent = health.agent
   const detail = health.agentDetail
   if (typeof agent === 'string' && agent !== 'running' && agent !== 'none') {
-    return `agent ${agent}${typeof detail === 'string' ? `: ${detail}` : ''}`
+    parts.push(`agent ${agent}${typeof detail === 'string' ? `: ${detail}` : ''}`)
   }
   const endReason = health.endReason
   if (typeof endReason === 'string') {
-    return `session ${endReason}${typeof health.detail === 'string' ? `: ${health.detail}` : ''}`
+    parts.push(`session ${endReason}${typeof health.detail === 'string' ? `: ${health.detail}` : ''}`)
   }
-  const parts: string[] = []
   const starved = health.starved
   if (typeof starved === 'number' && starved > 0) parts.push(`${starved} decisions took the empty-queue default`)
   // Reported beside the starvation it explains. A rewritten action file used to
