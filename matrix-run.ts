@@ -141,7 +141,21 @@ export interface CellResult {
    * Merging them would answer neither question: the point of authoring is that
    * building is a cost you choose to pay and playing is what gets scored.
    */
-  build: { usd: number | null; tokens: number | null; minutes: number; policy: string | null } | null
+  build: {
+    usd: number | null
+    tokens: number | null
+    minutes: number
+    policy: string | null
+    /**
+     * Credential path the AUTHOR billed against.
+     *
+     * It belongs here rather than on the row. The row's `authMode` describes
+     * whoever played, and an authored cell is played by a program with no
+     * credentials at all, so that field is correctly null while the build was
+     * very much billed to something.
+     */
+    authMode: 'api-key' | 'oauth' | null
+  } | null
   scoreField: string | null
   /** Which way is better on that channel. A minimize goal ranks inverted. */
   scoreDirection: 'maximize' | 'minimize' | null
@@ -479,7 +493,13 @@ export async function runCell(cell: MatrixCell, options: RunCellOptions = {}): P
   let policyCommand: string | null = null
   if (cell.profile.author !== undefined) {
     const attempt = await authorPolicy(cell, options, now)
-    authored = { usd: attempt.usd, tokens: attempt.tokens, minutes: attempt.minutes, policy: attempt.policy }
+    authored = {
+      usd: attempt.usd,
+      tokens: attempt.tokens,
+      minutes: attempt.minutes,
+      policy: attempt.policy,
+      authMode: attempt.authMode,
+    }
     if (attempt.policy === null) {
       // Blocked, never scored zero. A profile that built nothing did not play
       // badly; it produced no player, and those are different findings.
@@ -658,7 +678,14 @@ async function authorPolicy(
   cell: MatrixCell,
   options: RunCellOptions,
   now: () => number,
-): Promise<{ usd: number | null; tokens: number | null; minutes: number; policy: string | null; detail: string | null }> {
+): Promise<{
+  usd: number | null
+  tokens: number | null
+  minutes: number
+  policy: string | null
+  authMode: 'api-key' | 'oauth' | null
+  detail: string | null
+}> {
   const profile = cell.profile
   const started = now()
   const dir = join(
@@ -676,7 +703,14 @@ async function authorPolicy(
       cell.seed + PRACTICE_SEED_OFFSET,
     )
   } catch (error) {
-    return { usd: null, tokens: null, minutes: 0, policy: null, detail: `no practice game: ${(error as Error).message}` }
+    return {
+      usd: null,
+      tokens: null,
+      minutes: 0,
+      policy: null,
+      authMode: null,
+      detail: `no practice game: ${(error as Error).message}`,
+    }
   }
 
   // Paced like a live game so the practice feels like the real thing.
@@ -748,6 +782,7 @@ async function authorPolicy(
   return {
     usd: meter.costUsd,
     tokens: meter.tokens,
+    authMode: meter.authMode,
     minutes: (now() - started) / 60_000,
     policy,
     detail,
