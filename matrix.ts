@@ -157,6 +157,23 @@ export interface MatrixProtocol {
    * streaming profile must say which one it ran.
    */
   whenEmpty: 'noop' | 'repeat-last' | null
+  /**
+   * Milliseconds of wall clock the game spends on one decision, or null when
+   * no profile streams.
+   *
+   * A POLLED game has no need of this: it stands still while the agent thinks,
+   * so the agent's speed cannot cost it anything. An ASYNCHRONOUS game does not
+   * wait, which means wall clock is the agent's whole budget — and with no pace
+   * the game steps as fast as the host can run it, so a player that needs two
+   * seconds to boot has already lost every decision in the episode. That is not
+   * a measurement of the player; it is a measurement of the host's clock speed.
+   *
+   * Stating the pace is what makes a streamed cell comparable to a polled one
+   * and to a human: `pace=16` is roughly sixty decisions a second, `pace=200`
+   * is a deliberate turn-taking game. It belongs with the frame repeat and the
+   * queue depth because, like them, it changes what the number means.
+   */
+  paceMs: number | null
 }
 
 /** One named RAM byte an adapter may publish to the agent. */
@@ -303,6 +320,7 @@ export function cellId(cell: MatrixCell): string {
     cell.protocol.sticky,
     cell.protocol.queue ?? '-',
     cell.protocol.whenEmpty ?? '-',
+    cell.protocol.paceMs === null ? '-' : `${cell.protocol.paceMs}ms`,
   ]
   return [
     `${cell.profile.id}(${profile.join(',')})`,
@@ -341,7 +359,7 @@ const ADAPTERS = new Set<MatrixGame['adapter']>(['ale', 'gymnasium', 'stable-ret
 const PROFILE_KEYS = new Set(['harness', 'model', 'effort', 'policy', 'note', 'transport'])
 const GAME_KEYS = new Set(['adapter', 'target', 'note'])
 const OBJECTIVE_KEYS = new Set(['goal', 'horizon', 'budgetUsd'])
-const PROTOCOL_KEYS = new Set(['frameskip', 'sticky', 'seeds', 'seed0', 'queue', 'empty'])
+const PROTOCOL_KEYS = new Set(['frameskip', 'sticky', 'seeds', 'seed0', 'queue', 'empty', 'pace'])
 const SENSOR_KEYS = new Set(['pixels', 'scale', 'channels'])
 
 /** Parse `ball_x@99,paddle_x@72`, or `-` for none. */
@@ -526,6 +544,7 @@ export function parseMatrix(text: string): MatrixDefinition {
         seed0: map.get('seed0') === undefined ? 0 : integer(map, 'seed0', `${where} (protocol.${id})`, 0),
         queue: map.get('queue') === undefined ? null : integer(map, 'queue', `${where} (protocol.${id})`, 1),
         whenEmpty: emptyRaw ?? null,
+        paceMs: map.get('pace') === undefined ? null : integer(map, 'pace', `${where} (protocol.${id})`, 0),
       })
       continue
     }
@@ -592,11 +611,12 @@ export function parseMatrix(text: string): MatrixDefinition {
       const unstated: string[] = []
       if (protocol.queue === null) unstated.push('queue=<depth>')
       if (protocol.whenEmpty === null) unstated.push('empty=noop|repeat-last')
+      if (protocol.paceMs === null) unstated.push('pace=<ms per decision>')
       if (unstated.length > 0) {
         throw new Error(
           `protocol.${protocol.id} must state ${unstated.join(' and ')}, because`
           + ` profile.${streaming[0]!.id} streams: an asynchronous agent leaves the game to decide what acts`
-          + ' while it thinks, and a cell that does not say what that was is not a result',
+          + ' while it thinks and how long it had to think, and a cell that states neither is not a result',
         )
       }
     }

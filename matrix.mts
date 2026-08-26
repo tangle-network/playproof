@@ -33,7 +33,8 @@ for (const [index, cell] of cells.entries()) {
   const row = await runCell(cell)
   rows.push(row)
   const headline = row.status === 'played'
-    ? `score=${row.score ?? '-'} deaths=${row.deaths ?? '-'} decisions=${row.decisions} usd=${row.usd.toFixed(4)}`
+    ? `score=${row.score ?? '-'} deaths=${row.deaths ?? '-'} decisions=${row.decisions}`
+      + ` tokens=${row.tokens ?? 'unmetered'} usd=${row.usd === null ? 'unmetered' : row.usd.toFixed(4)}`
     : `BLOCKED (${row.blocked?.reason}): ${row.blocked?.detail}`
   const note = row.transportNote === null ? '' : `  [${row.transportNote}]`
   console.error(`[${index + 1}/${cells.length}] ${row.name}  ${headline}${note}`)

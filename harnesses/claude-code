@@ -1,0 +1,232 @@
+#!/usr/bin/env node
+/**
+ * Start Claude Code as a player inside a streaming sandbox.
+ *
+ * The stream transport starts this program with the sandbox as its working
+ * directory and nothing else. Its whole job is to turn that directory into a
+ * task a coding agent can accept, and to make sure the agent cannot reach
+ * anything outside it.
+ *
+ * WHY A LAUNCHER AT ALL. `matrix.ts` maps `harness=<name>` straight to a
+ * command, so `harness=claude-code` looked wired and was not: no such program
+ * existed, and a cell naming it produced an agent that never started, which the
+ * game cannot tell from an agent that is still thinking. This is the missing
+ * piece between a matrix definition and a real coding agent.
+ *
+ * WHY IT IS JAILED. The agent is given a directory of observations and asked to
+ * win. The contract, the milestones and the attestation live in the checkout
+ * this process was started from, and an agent that reads them is not playing
+ * the game — it is reading the answer. `sandbox-exec` denies that read, so the
+ * result means what it claims to mean. The jail is on by default and refuses to
+ * run unjailed unless told to in as many words.
+ *
+ * Usage: run by the stream driver. Accepts --model and --effort.
+ *
+ *   PLAYPROOF_JAIL_DENY   extra path to hide, repeatable with `:` (default: the
+ *                         playproof checkout this file lives in)
+ *   PLAYPROOF_JAIL        `off` runs unjailed, and says so on stderr
+ *   PLAYPROOF_CLAUDE_BIN  the agent binary (default: claude)
+ */
+import { spawn } from 'node:child_process'
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
+import { homedir, platform, tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const sandbox = process.env.PLAYPROOF_STREAM_DIR ?? process.cwd()
+
+/** What the game told this process about itself. */
+let brief
+try {
+  brief = JSON.parse(readFileSync(join(sandbox, 'brief.json'), 'utf8'))
+} catch (error) {
+  console.error(`playproof: no readable brief.json in ${sandbox}: ${error.message}`)
+  process.exit(2)
+}
+
+const argv = process.argv.slice(2)
+const flag = (name) => {
+  const at = argv.indexOf(name)
+  return at >= 0 ? argv[at + 1] : undefined
+}
+const model = flag('--model')
+const effort = flag('--effort')
+
+const goal = process.env.PLAYPROOF_GOAL ?? 'maximize:score'
+const horizon = process.env.PLAYPROOF_HORIZON ?? 'unstated'
+const budget = process.env.PLAYPROOF_SPEND_CEILING ?? 'unstated'
+const paceMs = Number(process.env.PLAYPROOF_PACE_MS ?? brief.paceMs ?? 0)
+const seconds = paceMs > 0 && horizon !== 'unstated' ? Math.round((paceMs * Number(horizon)) / 1000) : null
+
+// The task, stated once. It gives the agent the control scheme, the clock and
+// the goal, and nothing about how to play — a prompt that suggests a strategy
+// measures the prompt.
+const task = `You are playing a video game through a directory of files. This directory is your workspace; work in it however you like.
+
+HOW YOU SEE THE GAME
+  ./${brief.observations}/NNNNNN.json   one file per decision, appended as the game runs
+  ./${brief.latest}                     the newest of those, same content
+Each is {"turn": n, "text": "<the screen>"${brief.vision ? ', "images": [...]' : ''}}.
+
+HOW YOU ACT
+  Append one command word per line to ./${brief.actions}
+  Legal words: ${brief.commands.join(' ')}
+  The queue holds ${brief.queueDepth}. Writes past that are dropped, newest first.
+
+THE RULE THAT MATTERS MOST
+  THE GAME DOES NOT WAIT FOR YOU. It takes one decision every ${paceMs} ms whatever you are doing.
+  If the queue is empty when a decision comes due, the game does: ${brief.whenEmpty}.
+  So an empty action file is not a pause. It is you playing "${brief.whenEmpty}" over and over.
+  Keep the queue fed. Write ahead when you know what you want; refill it as you learn more.
+
+YOUR GOAL
+  ${goal}, over ${horizon} decisions${seconds === null ? '' : ` — about ${seconds}s of wall clock`}.
+  Spend at most $${budget}.
+
+You have a full shell and a full workspace. Read as many past observations as you want, write scripts over them, keep notes, run subagents. Nothing interrupts you and nothing is asking you for one decision at a time. The only thing the game reads from you is that file of words.
+
+Start now, and get an action into the file before you do anything else — every millisecond you spend before your first write is a decision the game already made for you.`
+
+const bin = process.env.PLAYPROOF_CLAUDE_BIN ?? 'claude'
+// STREAMED, not batched. A streamed cell ends when the game reaches its
+// horizon, and the agent is usually still thinking — the driver then kills it,
+// so an end-of-run cost report would never arrive in the ordinary case and
+// every metered cell would read $0. `stream-json` emits usage as the agent
+// works, so the cost file is current at any instant the game chooses to stop.
+const agentArgs = [
+  '-p',
+  task,
+  '--permission-mode',
+  'bypassPermissions',
+  '--output-format',
+  'stream-json',
+  '--verbose',
+]
+if (model !== undefined) agentArgs.push('--model', model)
+// Not every build of the CLI accepts an effort flag, and a rejected flag kills
+// the player silently. It is passed only when asked for, and its absence is
+// visible in the cell rather than guessed at here.
+if (effort !== undefined) agentArgs.push('--effort', effort)
+
+const jail = process.env.PLAYPROOF_JAIL ?? 'on'
+// The checkout that owns this launcher: the contract, the milestones and the
+// attestation are all under it, so it is what must be hidden by default.
+const checkout = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const deny = [checkout, ...(process.env.PLAYPROOF_JAIL_DENY ?? '').split(':')].filter((path) => path !== '')
+
+let command = bin
+let args = agentArgs
+if (jail === 'off') {
+  console.error('playproof: JAIL OFF — this agent can read the grader, so its score proves nothing')
+} else if (platform() === 'darwin') {
+  const home = homedir()
+  const profile = [
+    '(version 1)',
+    '(allow default)',
+    // Reads first: the agent may see the machine, but never the thing that
+    // grades it. Denies are written after the blanket allow so they win.
+    ...deny.map((path) => `(deny file-read* (subpath ${JSON.stringify(path)}))`),
+    // ...except the sandbox itself, which is legitimately inside nothing.
+    `(allow file-read* (subpath ${JSON.stringify(sandbox)}))`,
+    // Writes: the sandbox, the agent's own state, and scratch. Everything else
+    // is denied, so a player cannot edit the harness that is running it.
+    '(deny file-write*)',
+    `(allow file-write* (subpath ${JSON.stringify(sandbox)}))`,
+    `(allow file-write* (subpath ${JSON.stringify(join(home, '.claude'))}))`,
+    `(allow file-write* (subpath ${JSON.stringify(join(home, '.cache'))}))`,
+    `(allow file-write* (subpath ${JSON.stringify(tmpdir())}))`,
+    '(allow file-write* (subpath "/private/tmp"))',
+    '(allow file-write* (subpath "/private/var/folders"))',
+    '(allow file-write-data (subpath "/dev"))',
+  ].join('\n')
+  const profilePath = join(sandbox, '.jail.sb')
+  writeFileSync(profilePath, `${profile}\n`)
+  command = '/usr/bin/sandbox-exec'
+  args = ['-f', profilePath, bin, ...agentArgs]
+} else {
+  console.error(
+    `playproof: no jail implementation for ${platform()}.`
+    + ' Set PLAYPROOF_JAIL=off to run anyway and accept that the score proves nothing.',
+  )
+  process.exit(3)
+}
+
+const costPath = join(sandbox, 'agent-cost.json')
+const transcriptPath = join(sandbox, 'agent-transcript.jsonl')
+
+let inputTokens = 0
+let outputTokens = 0
+/** Only the vendor's own dollar figure, never one computed here from a guessed price. */
+let usd = null
+let turns = 0
+
+/** Republish the meter in a shape the driver reads without knowing this vendor. */
+function publish() {
+  try {
+    writeFileSync(
+      costPath,
+      `${JSON.stringify({
+        usd,
+        tokens: inputTokens + outputTokens === 0 ? null : inputTokens + outputTokens,
+        inputTokens,
+        outputTokens,
+        turns,
+        vendor: bin,
+        model: model ?? null,
+      })}\n`,
+    )
+  } catch {}
+}
+
+function account(event) {
+  if (event === null || typeof event !== 'object') return
+  if (event.type === 'assistant' || event.type === 'user') turns += 1
+  const usage = event.usage ?? event.message?.usage
+  if (usage !== undefined && usage !== null) {
+    // Cache reads and writes are billed, so they are counted. Omitting them
+    // would report a token figure lower than the one on the invoice.
+    inputTokens
+      += (usage.input_tokens ?? 0)
+      + (usage.cache_read_input_tokens ?? 0)
+      + (usage.cache_creation_input_tokens ?? 0)
+    outputTokens += usage.output_tokens ?? 0
+  }
+  const reported = event.total_cost_usd ?? event.cost_usd
+  if (typeof reported === 'number' && Number.isFinite(reported)) usd = reported
+}
+
+// Published before the agent starts, so a cell whose agent never ran reports an
+// absent cost rather than no file at all.
+publish()
+
+const child = spawn(command, args, { cwd: sandbox, stdio: ['ignore', 'pipe', 'inherit'] })
+let carry = ''
+child.stdout.setEncoding('utf8')
+child.stdout.on('data', (chunk) => {
+  carry += chunk
+  for (;;) {
+    const at = carry.indexOf('\n')
+    if (at < 0) break
+    const line = carry.slice(0, at)
+    carry = carry.slice(at + 1)
+    if (line.trim() === '') continue
+    // The raw stream is kept whole: it is the only account of what the agent
+    // actually did in here, and a cell with a surprising score is unreadable
+    // without it.
+    try {
+      appendFileSync(transcriptPath, `${line}\n`)
+    } catch {}
+    try {
+      account(JSON.parse(line))
+    } catch {}
+  }
+  publish()
+})
+child.on('error', (error) => {
+  console.error(`playproof: could not start ${bin}: ${error.message}`)
+  process.exit(4)
+})
+child.on('exit', (code, signal) => {
+  publish()
+  process.exit(signal === null ? (code ?? 0) : 1)
+})

@@ -70,7 +70,7 @@
  *   PLAYPROOF_STREAM_ACTIONS  action file name inside the sandbox (default actions)
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdirSync, openSync, readSync, writeFileSync, closeSync, existsSync } from 'node:fs'
+import { mkdirSync, openSync, readFileSync, readSync, writeFileSync, closeSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentDriver } from '../episode'
 import type { Observation } from '../runtime'
@@ -95,6 +95,15 @@ export interface StreamHealth {
   /** Deepest the queue ever got. */
   peakQueue: number
   /**
+   * Decisions the game was already late for when they came due.
+   *
+   * A paced cell with a high overrun did not run at the pace it declared, so
+   * the agent had less thinking time than the definition says. Reported rather
+   * than corrected: silently stretching the episode would hide the fact that
+   * the host could not hold the rate.
+   */
+  overrun: number
+  /**
    * What became of the agent this driver started.
    *
    * `none` when the caller started its own. The game never waits for an agent,
@@ -107,6 +116,18 @@ export interface StreamHealth {
   agent: 'none' | 'running' | 'exited' | 'failed'
   /** The child's exit status, or the reason it could not start. Null while healthy. */
   agentDetail: string | null
+  /**
+   * What the agent says it spent, or null when it did not say.
+   *
+   * This transport cannot meter per decision: the agent runs on its own clock
+   * and answers into a file, so there is no call to bracket. The only honest
+   * source is the agent's own report, republished by its launcher into
+   * `agent-cost.json`. NULL AND ZERO ARE DIFFERENT FACTS — a free arm and an
+   * unmetered one look identical in a total, and only one of them is a result.
+   */
+  costUsd: number | null
+  /** Tokens the agent says it has spent, or null when it did not say. */
+  tokens: number | null
 }
 
 export interface StreamSandboxDriverOptions {
@@ -118,6 +139,18 @@ export interface StreamSandboxDriverOptions {
   queueDepth: number
   /** What the game does when no action is waiting. */
   whenEmpty: WhenEmpty
+  /**
+   * Wall clock the game spends on one decision. Omitted means as fast as the
+   * host can step, which is only honest for a player that is already running.
+   *
+   * The game does not wait for the agent, so wall clock IS the agent's budget.
+   * Unpaced, an episode of a few hundred decisions is over in milliseconds and
+   * anything with a process to start has lost all of them before it printed a
+   * line — a result that reports the host's clock speed, not the player. The
+   * pace is held against a schedule rather than slept after each decision, so a
+   * slow decision borrows from the next one instead of stretching the episode.
+   */
+  paceMs?: number
   /** Write the rendered screen into the sandbox next to the text. Off by default. */
   vision?: boolean
   /** Started once with `dir` as its working directory, and killed at `close()`. */
@@ -164,6 +197,32 @@ export function createStreamSandboxDriver(options: StreamSandboxDriverOptions): 
   // Created empty so the agent can open it before the first decision without
   // racing the harness for its existence.
   if (!existsSync(actionPath)) writeFileSync(actionPath, '')
+  // The sandbox describes itself. A player of any kind is entitled to the
+  // control scheme and to the rule about what acts while it thinks — a person
+  // handed a cabinet reads the panel before the first credit. Everything here
+  // is the SHAPE of the channel, never the state of the game: no value this
+  // driver writes comes from anywhere but the observation it was handed.
+  // Without it an agent started in here must guess its own vocabulary, and a
+  // guessed word is a rejected line, which reads in the health record as an
+  // agent that played badly rather than one that was never told the rules.
+  writeFileSync(
+    join(dir, 'brief.json'),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        actions: ACTION_FILE,
+        observations: 'observations',
+        latest: 'latest.json',
+        commands: [...options.commands],
+        queueDepth: options.queueDepth,
+        whenEmpty: options.whenEmpty,
+        paceMs: options.paceMs ?? null,
+        vision: options.vision === true,
+      },
+      null,
+      2,
+    )}\n`,
+  )
 
   const queue: string[] = []
   let offset = 0
@@ -180,11 +239,26 @@ export function createStreamSandboxDriver(options: StreamSandboxDriverOptions): 
   let agentDetail: string | null = null
   /** The child's last stderr, kept only to explain a death. */
   let agentStderr = ''
+  /** When the next decision is due, on the same clock `Date.now` reads. */
+  let dueAt: number | null = null
+  /** Decisions the game was already late for, so the pace was not held. */
+  let overrun = 0
 
   if (options.command !== undefined) {
     const started = spawn(options.command, [...(options.args ?? [])], {
       cwd: dir,
-      env: { ...process.env, ...(options.env ?? {}), PLAYPROOF_STREAM_DIR: dir },
+      env: {
+        ...process.env,
+        ...(options.env ?? {}),
+        PLAYPROOF_STREAM_DIR: dir,
+        // Duplicated from brief.json on purpose: a launcher that is a shell
+        // one-liner should not have to parse JSON to know the vocabulary.
+        PLAYPROOF_ACTIONS: ACTION_FILE,
+        PLAYPROOF_COMMANDS: options.commands.join(','),
+        PLAYPROOF_WHEN_EMPTY: options.whenEmpty,
+        PLAYPROOF_QUEUE_DEPTH: String(options.queueDepth),
+        PLAYPROOF_PACE_MS: String(options.paceMs ?? 0),
+      },
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -266,9 +340,38 @@ export function createStreamSandboxDriver(options: StreamSandboxDriverOptions): 
     }
   }
 
+  /**
+   * Read the cost the launcher republished, if it has by now.
+   *
+   * Written when the agent exits, so it is absent for a cell read while the
+   * agent still runs. Absence is reported as absence.
+   */
+  function reportedMeter(): { costUsd: number | null; tokens: number | null } {
+    const nonNegative = (value: unknown): number | null =>
+      typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(join(dir, 'agent-cost.json'), 'utf8'))
+      const meter = parsed as { usd?: unknown; tokens?: unknown }
+      return { costUsd: nonNegative(meter.usd), tokens: nonNegative(meter.tokens) }
+    } catch {
+      return { costUsd: null, tokens: null }
+    }
+  }
+
   return {
     dir,
     act: async (frame, _history, context) => {
+      // Hold the game's rate BEFORE the observation is written, so the agent's
+      // thinking time is the gap between two observations rather than a pause
+      // bolted on after it has already seen the next one.
+      if (options.paceMs !== undefined && options.paceMs > 0) {
+        const now = Date.now()
+        if (dueAt === null) dueAt = now
+        const wait = dueAt - now
+        if (wait > 0) await new Promise((resume) => setTimeout(resume, wait))
+        else if (dueAt < now) overrun += 1
+        dueAt = Math.max(dueAt, now) + options.paceMs
+      }
       // What the agent may see, built by the one function that never reads the
       // privileged channel. `frame` is that observation's text.
       const observation: Observation & { turn: number } = {
@@ -312,6 +415,17 @@ export function createStreamSandboxDriver(options: StreamSandboxDriverOptions): 
         }
       }
     },
-    health: () => ({ written, consumed, starved, dropped, rejected, peakQueue, agent, agentDetail }),
+    health: () => ({
+      written,
+      consumed,
+      starved,
+      dropped,
+      rejected,
+      peakQueue,
+      overrun,
+      agent,
+      agentDetail,
+      ...reportedMeter(),
+    }),
   }
 }
