@@ -17,3 +17,6 @@ __pycache__/
 
 # Experiments. A study runs here; nothing under it is ever committed.
 runs/
+
+# Local Python environment for adapters that need one (gymnasium, ALE).
+.venv/

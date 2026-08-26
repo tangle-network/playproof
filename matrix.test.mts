@@ -24,6 +24,7 @@ import {
   effectiveArms,
   generalization,
   kendallTauB,
+  parseGoal,
   runCell,
   runMatrix,
   type BuiltGame,
@@ -451,3 +452,65 @@ console.log(
   + ' deaths and tokens stay null rather than 0, aliased arms are counted once,'
   + ' and rows under two clocks are refused',
 )
+
+// ---- The score follows the objective, and minimize ranks inverted -----------
+
+{
+  // RED before this: the row read a channel literally named `score`, so every
+  // game publishing anything else scored null and could never be ranked. That
+  // is why a transfer statistic could not be computed across two games.
+  assert.deepEqual(parseGoal('maximize:score'), { direction: 'maximize', field: 'score' })
+  assert.deepEqual(parseGoal('maximize:steps'), { direction: 'maximize', field: 'steps' })
+  assert.deepEqual(parseGoal('minimize:deaths'), { direction: 'minimize', field: 'deaths' })
+}
+
+{
+  // Two games, two profiles, and the SAME true ordering: alpha beats beta on
+  // both. One game is scored on a maximize goal, the other on a minimize goal.
+  // Oriented, that is a perfect transfer (tau = 1). Unoriented it reads -1,
+  // which is the exact opposite of the truth.
+  const cell = (game: string, profile: string, score: number, direction: 'maximize' | 'minimize') => ({
+    cell: `${profile}/${game}`,
+    name: `${profile}/${game}`,
+    profile,
+    game,
+    objective: 'o',
+    protocol: 'p',
+    sensor: 's',
+    seed: 0,
+    rep: 1,
+    status: 'played' as const,
+    score,
+    scoreField: direction === 'minimize' ? 'deaths' : 'score',
+    scoreDirection: direction,
+    deaths: null,
+    decisions: 10,
+    emulatorFrames: null,
+    wallMs: 1,
+    tokens: null,
+    usd: 0,
+    cleared: null,
+    verified: [],
+    milestones: { verified: 0, total: 0 },
+    verdict: 'accepted' as const,
+    stoppedBy: null,
+    distinctInputs: 2,
+    replayDivergence: false,
+    actionsHash: `${profile}-${game}`,
+    transportNote: null,
+  })
+  const rows = [
+    cell('arcade', 'alpha', 900, 'maximize'),
+    cell('arcade', 'beta', 100, 'maximize'),
+    // alpha is BETTER here too, and better means fewer.
+    cell('survival', 'alpha', 1, 'minimize'),
+    cell('survival', 'beta', 9, 'minimize'),
+  ] as unknown as Parameters<typeof generalization>[0]
+  const transfer = generalization(rows)
+  assert.equal(transfer.pairs, 1)
+  assert.equal(
+    transfer.tau,
+    1,
+    'a minimize game must be oriented before correlating, or a perfect transfer reports as a perfect inversion',
+  )
+}

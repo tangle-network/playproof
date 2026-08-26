@@ -1,0 +1,14 @@
+# Half of a two-game study. Pool it with study-cartpole.matrix:
+#   npx tsx matrix.mts examples/study-2048.matrix examples/study-cartpole.matrix --out runs/study/cells.json
+profile.haiku  harness=./harnesses/claude-code model=claude-haiku-4-5-20251001 transport=stream
+profile.sonnet harness=./harnesses/claude-code model=claude-sonnet-5           transport=stream
+profile.opus   harness=./harnesses/claude-code model=claude-opus-5             transport=stream
+
+game.puzzle adapter=native-2048 target=2048
+
+objective.score goal=maximize:score horizon=100 budgetUsd=3
+
+protocol.async frameskip=1 sticky=0 seeds=1 queue=8 empty=repeat-last pace=1200
+sensor.ascii pixels=off channels=-
+
+reps 3
