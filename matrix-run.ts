@@ -141,10 +141,33 @@ export interface CellResult {
    * Merging them would answer neither question: the point of authoring is that
    * building is a cost you choose to pay and playing is what gets scored.
    */
-  build: { usd: number | null; tokens: number | null; minutes: number; policy: string | null } | null
+  build: {
+    usd: number | null
+    tokens: number | null
+    minutes: number
+    policy: string | null
+    /**
+     * Credential path the AUTHOR billed against.
+     *
+     * It belongs here rather than on the row. The row's `authMode` describes
+     * whoever played, and an authored cell is played by a program with no
+     * credentials at all, so that field is correctly null while the build was
+     * very much billed to something.
+     */
+    authMode: 'api-key' | 'oauth' | null
+  } | null
   scoreField: string | null
   /** Which way is better on that channel. A minimize goal ranks inverted. */
   scoreDirection: 'maximize' | 'minimize' | null
+  /**
+   * Credential path the agent billed against, or null when nothing said.
+   *
+   * Reported beside `usd` because it decides whether that number can exist. An
+   * `oauth` arm bills a plan and reports no per-request cost, so its null is
+   * UNBILLED THIS WAY, not free, and a study that compares it to a metered arm
+   * on cost is comparing a measurement to an absence.
+   */
+  authMode: 'api-key' | 'oauth' | null
   /** Whether the game declared itself finished. Null when it declares no end. */
   cleared: boolean | null
   /** Milestones the replay reproduced. */
@@ -396,6 +419,7 @@ function blockedResult(cell: MatrixCell, reason: BlockedReason, detail: string, 
     // see that an excluded row and a played row were aimed at the same channel.
     scoreField: null,
     scoreDirection: null,
+    authMode: null,
     cleared: null,
     verified: [],
     milestones: { verified: 0, total: 0 },
@@ -469,7 +493,13 @@ export async function runCell(cell: MatrixCell, options: RunCellOptions = {}): P
   let policyCommand: string | null = null
   if (cell.profile.author !== undefined) {
     const attempt = await authorPolicy(cell, options, now)
-    authored = { usd: attempt.usd, tokens: attempt.tokens, minutes: attempt.minutes, policy: attempt.policy }
+    authored = {
+      usd: attempt.usd,
+      tokens: attempt.tokens,
+      minutes: attempt.minutes,
+      policy: attempt.policy,
+      authMode: attempt.authMode,
+    }
     if (attempt.policy === null) {
       // Blocked, never scored zero. A profile that built nothing did not play
       // badly; it produced no player, and those are different findings.
@@ -550,6 +580,7 @@ export async function runCell(cell: MatrixCell, options: RunCellOptions = {}): P
       // same ranks the profile nobody metered first on cost per point.
       tokens: meter.tokens,
       usd: meter.metered && meter.costUsd === null ? null : (meter.costUsd ?? 0) + record.spentUsd,
+      authMode: meter.authMode,
       build: authored,
       cleared: record.gameOver,
       verified: record.verified,
@@ -647,7 +678,14 @@ async function authorPolicy(
   cell: MatrixCell,
   options: RunCellOptions,
   now: () => number,
-): Promise<{ usd: number | null; tokens: number | null; minutes: number; policy: string | null; detail: string | null }> {
+): Promise<{
+  usd: number | null
+  tokens: number | null
+  minutes: number
+  policy: string | null
+  authMode: 'api-key' | 'oauth' | null
+  detail: string | null
+}> {
   const profile = cell.profile
   const started = now()
   const dir = join(
@@ -665,7 +703,14 @@ async function authorPolicy(
       cell.seed + PRACTICE_SEED_OFFSET,
     )
   } catch (error) {
-    return { usd: null, tokens: null, minutes: 0, policy: null, detail: `no practice game: ${(error as Error).message}` }
+    return {
+      usd: null,
+      tokens: null,
+      minutes: 0,
+      policy: null,
+      authMode: null,
+      detail: `no practice game: ${(error as Error).message}`,
+    }
   }
 
   // Paced like a live game so the practice feels like the real thing.
@@ -737,24 +782,31 @@ async function authorPolicy(
   return {
     usd: meter.costUsd,
     tokens: meter.tokens,
+    authMode: meter.authMode,
     minutes: (now() - started) / 60_000,
     policy,
     detail,
   }
 }
 
-function meterOf(driver: AgentDriver): { metered: boolean; costUsd: number | null; tokens: number | null } {
+function meterOf(driver: AgentDriver): {
+  metered: boolean
+  costUsd: number | null
+  tokens: number | null
+  authMode: 'api-key' | 'oauth' | null
+} {
   const reporter = driver as { health?: () => Record<string, unknown> }
-  if (typeof reporter.health !== 'function') return { metered: false, costUsd: null, tokens: null }
+  if (typeof reporter.health !== 'function') return { metered: false, costUsd: null, tokens: null, authMode: null }
   const health = reporter.health()
   // `metered` asks whether this transport HAS a cost channel, which is a
   // different question from whether anything came down it. A per-decision
   // control that declares `fixedCostUsd: 0` is genuinely free and must total
   // zero; only a transport that owns a meter can report the absence of one.
-  if (!('costUsd' in health)) return { metered: false, costUsd: null, tokens: null }
+  if (!('costUsd' in health)) return { metered: false, costUsd: null, tokens: null, authMode: null }
   const nonNegative = (value: unknown): number | null =>
     typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
-  return { metered: true, costUsd: nonNegative(health.costUsd), tokens: nonNegative(health.tokens) }
+  const mode = health.authMode === 'api-key' || health.authMode === 'oauth' ? health.authMode : null
+  return { metered: true, costUsd: nonNegative(health.costUsd), tokens: nonNegative(health.tokens), authMode: mode }
 }
 
 function transportNoteOf(driver: AgentDriver): string | null {

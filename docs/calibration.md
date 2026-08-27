@@ -104,7 +104,7 @@ It did not always. Against a six-milestone contract whose top achievement was `s
 Declare an attrition milestone to keep it: `assertContractSeparates(report, { attritionChecks: ['life-lost'] })`.
 
 Excluding a point for dying was necessary and it was not sufficient.
-A contract whose top rung is `score >= 4` cannot tell 7 from 24 however it scores, so the packaged Breakout ladder now doubles — `score >= 1, 2, 4, 8, 18, 32, 64` — over a reference that reaches 64.
+A contract whose top rung is `score >= 4` cannot tell 7 from 24 however it scores, so the packaged Breakout ladder now doubles (`score >= 1, 2, 4, 8, 18, 32, 64`) over a reference that reaches 64.
 The strongest control reaches 5 of those 7, so the ladder still has rungs above the best program anyone has written for it.
 
 ### A contract that grades on one event
@@ -148,7 +148,7 @@ packaged.report.separates   // the verdict travels with the contract
 A contract with nothing to declare passes with no `declare` at all.
 The packaged ALE Breakout contract is calibrated that way in `ale.test.mts`: seven legible achievement rungs, no hash, no attrition milestone, and no prerequisite the whole contract hangs off.
 
-A target that is not meant to separate — a tier demonstration, a smoke fixture — says so in words, and the declaration is refused when it goes stale:
+A target that is not meant to separate, such as a tier demonstration or a smoke fixture, says so in words, and the declaration is refused when it goes stale:
 
 ```ts
 PackagedContract.calibrate(game, contract, {

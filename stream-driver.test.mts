@@ -37,6 +37,25 @@ function sandbox(options: { queueDepth: number; whenEmpty: 'noop' | 'repeat-last
   })
 }
 
+/**
+ * Read the health once the agent's fate is known.
+ *
+ * `running` means the driver has not yet been told what became of the child.
+ * Polling until it changes tests what the driver reports; sleeping a fixed
+ * interval tests how busy the machine was.
+ */
+async function settled(
+  driver: ReturnType<typeof createStreamSandboxDriver>,
+  timeoutMs = 5000,
+): Promise<ReturnType<typeof driver.health>> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const health = driver.health()
+    if (health.agent !== 'running' || Date.now() > deadline) return health
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
 // ---- The game does not wait ------------------------------------------------
 
 {
@@ -216,11 +235,12 @@ function sandbox(options: { queueDepth: number; whenEmpty: 'noop' | 'repeat-last
     args: ['-e', 'console.error("the agent gave up"); process.exit(2)'],
   })
   try {
-    for (let turn = 1; turn <= 3; turn += 1) {
-      await driver.act('f', [], context(turn))
-      await new Promise((resolve) => setTimeout(resolve, 40))
-    }
-    const health = driver.health()
+    for (let turn = 1; turn <= 3; turn += 1) await driver.act('f', [], context(turn))
+    // Wait for the CONDITION, not for a duration. A fixed sleep asserts that
+    // the host delivered the child's exit event inside that window, which it
+    // does not owe anyone: measured flaky here, reporting `running` for a
+    // process that had already exited.
+    const health = await settled(driver)
     assert.equal(health.agent, 'failed')
     assert.match(health.agentDetail ?? '', /exited \(2\)/u, 'the exit status must be reported')
     assert.match(health.agentDetail ?? '', /the agent gave up/u, 'and what it printed, which is why it died')

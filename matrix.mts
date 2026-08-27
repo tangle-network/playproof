@@ -69,7 +69,18 @@ for (const [index, cell] of cells.entries()) {
   rows.push(row)
   const headline = row.status === 'played'
     ? `score=${row.score ?? '-'} deaths=${row.deaths ?? '-'} decisions=${row.decisions}`
-      + ` tokens=${row.tokens ?? 'unmetered'} usd=${row.usd === null ? 'unmetered' : row.usd.toFixed(4)}`
+      // An authored cell reports what BUILDING it cost, next to what its
+      // program scored. They answer different questions and a single number
+      // cannot carry both.
+      + (row.build === null
+        ? ''
+        : ` build=${row.build.minutes.toFixed(1)}m/${row.build.tokens ?? '?'}tok/`
+          + `${row.build.usd === null ? `unbilled(${row.build.authMode ?? 'unknown'})` : `$${row.build.usd.toFixed(2)}`}`)
+      + ` tokens=${row.tokens ?? 'unmetered'}`
+      // An absent cost reads as its REASON. `oauth` bills a plan and reports no
+      // per-request figure, so "unbilled(oauth)" and "$0.0000" are different
+      // facts and must not print the same.
+      + ` usd=${row.usd === null ? `unbilled(${row.authMode ?? 'unknown'})` : row.usd.toFixed(4)}`
     : `BLOCKED (${row.blocked?.reason}): ${row.blocked?.detail}`
   const note = row.transportNote === null ? '' : `  [${row.transportNote}]`
   console.error(`[${index + 1}/${cells.length}] ${row.name}  ${headline}${note}`)

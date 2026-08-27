@@ -29,7 +29,7 @@ The emulator adapters were already capturing the screen.
 `ale/worker.py` calls `getScreenRGB()`, hashes those pixels into `frameHash` for verification, and used to throw the picture away; the agent received a luminance-to-ASCII downsample of it.
 That is a perception limit the harness created, not a result about the agent.
 
-Measured on ALE Breakout, against the six-milestone contract of the time: `stealth/ox-alpha`, a `text+image->text` model, and `liquid/lfm-2.5-2.6b:free` both scored 0 of 6 milestones, and their own transcripts show them reading the ASCII as a maze — "exploring the map", "positioned near the goal area" — rather than a paddle-and-ball game.
+Measured on ALE Breakout, against the six-milestone contract of the time: `stealth/ox-alpha`, a `text+image->text` model, and `liquid/lfm-2.5-2.6b:free` both scored 0 of 6 milestones, and their own transcripts show them reading the ASCII as a maze rather than a paddle-and-ball game, with phrases like "exploring the map" and "positioned near the goal area".
 One of them pressed `FIRE` twice in 45 turns, so no ball was ever in play.
 
 ### Bounds

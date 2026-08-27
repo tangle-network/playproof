@@ -134,6 +134,18 @@ export interface StreamHealth {
   costUsd: number | null
   /** Tokens the agent says it has spent, or null when it did not say. */
   tokens: number | null
+  /**
+   * Which credential path the agent used, as its launcher reported it.
+   *
+   * `'api-key' | 'oauth'` is the union the rest of the stack uses, and the CLI
+   * agent registry passes the same value to a spawned backend as
+   * `CLAUDE_CODE_AUTH_MODE`. Null when the launcher did not say.
+   *
+   * It decides whether a dollar figure can exist. Under `oauth` the agent bills
+   * against a plan and reports no per-request cost, so a null cost means
+   * UNBILLED THIS WAY rather than free.
+   */
+  authMode: 'api-key' | 'oauth' | null
 }
 
 export interface StreamSandboxDriverOptions {
@@ -385,15 +397,16 @@ export function createStreamSandboxDriver(options: StreamSandboxDriverOptions): 
    * Written when the agent exits, so it is absent for a cell read while the
    * agent still runs. Absence is reported as absence.
    */
-  function reportedMeter(): { costUsd: number | null; tokens: number | null } {
+  function reportedMeter(): { costUsd: number | null; tokens: number | null; authMode: 'api-key' | 'oauth' | null } {
     const nonNegative = (value: unknown): number | null =>
       typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
     try {
       const parsed: unknown = JSON.parse(readFileSync(join(dir, 'agent-cost.json'), 'utf8'))
-      const meter = parsed as { usd?: unknown; tokens?: unknown }
-      return { costUsd: nonNegative(meter.usd), tokens: nonNegative(meter.tokens) }
+      const meter = parsed as { usd?: unknown; tokens?: unknown; authMode?: unknown }
+      const mode = meter.authMode === 'api-key' || meter.authMode === 'oauth' ? meter.authMode : null
+      return { costUsd: nonNegative(meter.usd), tokens: nonNegative(meter.tokens), authMode: mode }
     } catch {
-      return { costUsd: null, tokens: null }
+      return { costUsd: null, tokens: null, authMode: null }
     }
   }
 

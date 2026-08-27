@@ -143,7 +143,8 @@
     "prepublishOnly": "pnpm run ci"
   },
   "devDependencies": {
-    "@tangle-network/agent-runtime": "0.142.3",
+    "@tangle-network/agent-eval": "0.170.0",
+    "@tangle-network/agent-runtime": "0.175.0",
     "@types/node": "^25.9.3",
     "tsup": "^8.5.0",
     "tsx": "^4.19.0",

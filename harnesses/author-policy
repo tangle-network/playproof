@@ -149,6 +149,28 @@ if (jail === 'off') {
   process.exit(3)
 }
 
+/**
+ * Which credential path the agent used, in the vocabulary the rest of the
+ * stack already uses.
+ *
+ * `authMode: 'api-key' | 'oauth'` is the union in
+ * `@tangle-network/agent-interface`, and the CLI agent registry already passes
+ * it to a spawned backend as `CLAUDE_CODE_AUTH_MODE`. Both names are reused
+ * here so a run in this harness and a run in a sandbox describe themselves the
+ * same way.
+ *
+ * It belongs on the record because it decides whether a dollar figure exists at
+ * all. Under `oauth` the agent bills against a plan and reports no per-request
+ * cost, so a null there means UNBILLED THIS WAY, not free. A study that reads
+ * those two the same ranks the arm nobody could meter first on cost.
+ */
+function authMode() {
+  const declared = process.env.CLAUDE_CODE_AUTH_MODE
+  if (declared === 'api-key' || declared === 'oauth') return declared
+  const key = process.env.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_AUTH_TOKEN
+  return key !== undefined && key !== '' ? 'api-key' : 'oauth'
+}
+
 const costPath = join(sandbox, 'agent-cost.json')
 const transcriptPath = join(sandbox, 'agent-transcript.jsonl')
 let inputTokens = 0
@@ -168,6 +190,7 @@ function publish() {
         turns,
         vendor: bin,
         model: model ?? null,
+        authMode: authMode(),
       })}\n`,
     )
   } catch {}
