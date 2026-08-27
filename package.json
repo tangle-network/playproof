@@ -1,6 +1,6 @@
 {
   "name": "@tangle-network/playproof",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Turn games into verifiable, cost-aware benchmarks for any agent.",
   "license": "Apache-2.0",
   "type": "module",

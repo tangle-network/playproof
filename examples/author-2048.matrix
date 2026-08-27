@@ -13,9 +13,9 @@ game.puzzle adapter=native-2048 target=2048
 
 # A real horizon. A program does not need the clock a typist needs, so the
 # episode can be as long as the game deserves.
-objective.score goal=maximize:score horizon=2000 budgetUsd=4
+objective.score goal=maximize:score horizon=20000 budgetUsd=4
 
 protocol.det frameskip=1 sticky=0 seeds=1 queue=8 empty=noop pace=0
 sensor.ascii pixels=off channels=-
 
-reps 2
+reps 1

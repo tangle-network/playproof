@@ -2,6 +2,70 @@
 
 All notable changes to Playproof are documented here.
 
+## 0.10.0
+
+### An arena: many profiles, many games, one definition
+
+`matrix.ts` turns one hand-written definition into cells, and a cell is one profile playing one game at one objective under one protocol and one sensor, repeated `reps` times. None of those has a default, because each changes what the number means. `matrix-run.ts` plays every cell, attests every replay, and reports mean pairwise Kendall tau-b between the per-game rankings. The runner accepts several definition files and pools them, because two games do not fit one definition: each names its own score channel and its own seed.
+
+### How an agent is asked for a decision changes its score more than the model does
+
+Three transports over the one `AgentDriver` seam, so a study can measure the choice instead of baking one in.
+
+| transport | one process per | measured, same program, native-2048 |
+|---|---|---|
+| `per-decision` | decision | 37.29 ms/decision, score **4** |
+| `persistent` | episode | 1.28 ms/decision, score **1948** |
+| `stream` | episode, asynchronous | see below |
+
+Spawning per decision silently forbids a program from keeping state. It still answers every decision and still attests clean, so the failure is invisible in every field the harness records.
+
+### The asynchronous transport, and what acts while the agent thinks
+
+`drivers/stream-sandbox.ts` writes each observation into a sandbox directory and reads moves back from a file, so the agent is never blocked and can run its own scripts and subagents. The game does not wait, which forces three declarations on the protocol: `queue`, `empty` (`noop` stops, `repeat-last` continues, and those are different games), and `pace`.
+
+- **Without a pace, 12 decisions complete in 2 ms.** An agent that must start a process has lost the episode before it printed a line, and the score measures the host.
+- **The sandbox describes itself** in `brief.json`. An agent that guesses its vocabulary writes illegal words, and illegal words read as bad play.
+- **An agent that rewrites its action file is still heard.** The file is read forward from an offset, which assumes appending. The first real agent to use this transport kept its last eight moves with `open(path, 'w')`; the offset then sat past the end of a shorter file and the driver was deaf for the rest of the episode, while the health record reported 112 starved decisions. A shorter file now means a rewrite, and its contents replace what was pending.
+
+### Authoring: measure what a profile builds, not how fast it types
+
+Under any live transport the agent's start-up time and typing rate count against its score. **Measured across nine cells: the rank correlation between moves delivered and score was 0.94.** One agent wrote a working expectimax search and scored 240, because the harness graded how fast its author typed.
+
+`author=` splits the cell. The agent gets a practice game at a different seed for `buildMin` minutes, scored by nobody, and must leave an executable `policy` behind. That program then runs cold against a fresh scored instance in its own process, and the replay is attested. Build cost lands in a `build` column and never touches the play score. An agent that leaves no policy is blocked, not scored zero.
+
+**Measured, native-2048, 6-minute build budget, two replicates each:**
+
+| profile | score | decisions played | build tokens |
+|---|---|---|---|
+| opus | 46,124 / 46,216 | 2000 / 2000 | 1.19M / 0.96M |
+| sonnet | 8,944 / 3,888 | **609 / 317** | 5.14M / 2.76M |
+| haiku | 4 / 60 | 2000 / 2000 | 2.23M / 1.96M |
+
+Opus's two runs differ by 92 points on 46,000. Sonnet spent 4.3x the tokens on a program that filled the board and lost in under a third of the horizon. The same model under a live transport scored 240.
+
+### Numbers that were not what they said
+
+- **The row scored a channel named `score`.** `goal=maximize:<field>` was parsed, validated, sent to the agent, then discarded. CartPole publishes `steps`, so it scored null and could never be ranked, which is why a transfer statistic could not be computed over two games. Measured: null before, 17 after.
+- **The rank correlation ignored direction.** A `minimize:` game was correlated raw against a maximize game, so a perfect transfer would have reported as a perfect inversion.
+- **An unmetered arm reported zero.** A streamed episode ends while the agent is still working, so an end-of-run cost report never arrives. Usage now accrues from the agent's own stream, and an unmetered arm reports null. A control that declares itself free still totals zero.
+- **`authMode` says which credential path was billed.** `'api-key' | 'oauth'`, the union `@tangle-network/agent-interface` uses, read from `CLAUDE_CODE_AUTH_MODE` as the CLI agent registry sets it. Under `oauth` an absent cost means unbilled this way, not free.
+- **The transport note substituted one fact for another.** The fate of the agent returned early and hid the starvation count, so the one arm whose agent finished was the one arm whose starvation could not be read.
+- **A practice game had no bound.** `pace=0` is correct for a scored episode played by a program. Applied to practice it produced 480,000 turns, 449,821 observation files and 1.7 GB in one cell. Practice now has a 250 ms pace floor and a 20,000-turn cap that depends on no declared number.
+- **A cell that takes hours printed nothing for hours.** One authoring cell spent 2h13m on 2000 decisions with a compiled search and reported nothing throughout, so a slow run could not be told from a hung one. A cell is now announced before it runs and prints an elapsed heartbeat.
+
+### A frame-advance barrier that fails must say so
+
+`gap()` sends one run-loop iteration between RetroArch frame advances. `FRAMEADVANCE` returns as soon as RetroArch accepts it, so without that iteration the next advance can be issued while the previous frame is still settling. `command` returns null when it gives up and `gap` discarded it, so a barrier that did not happen looked exactly like one that did. The same-process replay gate failed four times in one day with a specific shape: two replays of one boot state and one input log agreed byte for byte to emuFrame 811, then differed on channel values at identical frame numbers.
+
+### Composition, not reimplementation
+
+`hillclimb.ts` makes a played game a `Verifier` that a shot loop can climb. `improve` in `@tangle-network/agent-runtime` already owns the loop over ten profile surfaces, and `compareOptimizationMethods` in `@tangle-network/agent-eval` already owns disjoint train, selection and final-test scenarios, bootstrap resamples and Bonferroni-adjusted simultaneous confidence. A game score is not a pass: a green suite has nothing left to win, so `keepGoing` says the program works and another shot is still worth spending. `examples/agent-eval-fit.mts` exists to be compiled, so a change on either side that breaks the join fails the typecheck instead of failing a study three hours in.
+
+### Documentation
+
+The README was 1042 lines across 17 sections, so a reader met install, one example, then twenty-five sections of calibration theory before learning an arena existed. It is now 231 lines with a links table, and 700 lines moved into `docs/` as reference pages. The first code block did not run: it referenced `target`, `chooseAction` and `privateKey`, none of which it declared. It now uses the bundled 2048 target and was executed to confirm its output.
+
 ## 0.9.0
 
 ### A tag cannot publish unless ci passed on the commit it points at
