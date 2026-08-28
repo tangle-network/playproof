@@ -1,0 +1,15 @@
+# A control for the gate-eligible study. Pool it:
+#   npx tsx matrix.mts examples/gate-eligible-2048.matrix examples/gate-canary-2048.matrix --out runs/gate/cells.json
+#
+# Two cells, not twenty. haiku's gap against opus is roughly 1000x and needs no
+# statistical power; what it buys is a floor. A harness fault that made every
+# arm score alike would show here as haiku scoring like the others, and nothing
+# in a two-arm comparison of opus and sonnet could reveal that.
+profile.haiku harness=./harnesses/claude-code author=./harnesses/author-policy model=claude-haiku-4-5-20251001 buildMin=6 transport=persistent
+
+game.puzzle adapter=native-2048 target=2048
+objective.score goal=maximize:score horizon=20000 budgetUsd=4
+protocol.det frameskip=1 sticky=0 seeds=1 queue=8 empty=noop pace=0
+sensor.ascii pixels=off channels=-
+
+reps 2
