@@ -116,6 +116,10 @@ BOOT_ATTEMPTS = 6
 # Save and load state are hotkeys with no reply, so both are retried until
 # RetroArch shows the work in its own log or writes the file.
 STATE_ATTEMPTS = 8
+# Restores allowed before a worker refuses to start a run. A restore that lands
+# somewhere else is retried, because the cause is a lost datagram or a retry
+# inside LOAD_STATE rather than anything about the content.
+BOOT_RESTORE_ATTEMPTS = 6
 # A state load makes RetroArch reinitialise its video, input, and audio
 # drivers, and that reinitialisation sometimes ends the process. A reset can
 # therefore replace the emulator, because a reset returns to the pinned boot
@@ -863,6 +867,9 @@ class Worker:
         self.gen = 0
         self.frame = 0
         self.boot_blob = None
+        # What the pinned boot instant reads as. Null until the boot state is
+        # pinned, and checked after every restore from then on.
+        self.boot_fingerprint = None
         self.boot_frame = 0
         self.history = []
         self.held = set()
@@ -924,6 +931,24 @@ class Worker:
         self.frame = self.boot_frame + 1
         self.gen += 1
         self._cache = None
+        # Pin what the boot instant LOOKS like, by restoring it once and reading
+        # the channels back. Every later restore must reproduce this exactly.
+        #
+        # WHY. `load_state` retries, and every failed attempt issues a
+        # FRAMEADVANCE that nothing counts, so a load that succeeds on the first
+        # attempt leaves the emulator one frame earlier than one that succeeds
+        # on the second. `reset` then sets `self.frame` unconditionally, so the
+        # worker's counter is right while the emulator is not.
+        #
+        # MEASURED: two same-process replays of one boot state and one input log
+        # agreed byte for byte to emuFrame 811 and then differed on channel
+        # values at IDENTICAL frame numbers, with `ch_c57e_c57f` reading 9000
+        # against 9001 — one tick apart, which is what one uncounted frame does.
+        # The gate failed roughly 40% of the time, and more often under load,
+        # which is when a retry is most likely.
+        self.boot_fingerprint = None
+        self._restore_boot()
+        self.boot_fingerprint = self._read_channels()
 
     def reset(self, seed=None):
         if seed is not None:
@@ -959,12 +984,26 @@ class Worker:
         what keeps a replacement out of the evidence.
         """
         self.held = set()
-        try:
-            self._release_all()
-            self.emulator.load_state(self.boot_blob)
-        except RetroArchError:
-            self._relaunch_onto_boot()
-        self.history = []
+        for attempt in range(BOOT_RESTORE_ATTEMPTS):
+            try:
+                self._release_all()
+                self.emulator.load_state(self.boot_blob)
+            except RetroArchError:
+                self._relaunch_onto_boot()
+            self.history = []
+            self._cache = None
+            # Nothing to check against while the fingerprint is being pinned.
+            if self.boot_fingerprint is None:
+                return
+            if self._read_channels() == self.boot_fingerprint:
+                return
+        # Fail rather than play on. A run that starts one frame from where it
+        # believes it starts produces a log that cannot be replayed, and a
+        # divergence discovered later cannot be told from a bad policy.
+        raise RetroArchError(
+            'the boot state did not restore to the pinned instant after %d attempts.'
+            ' The emulator is not where this worker believes it is, so any run from here'
+            ' would not reproduce.' % BOOT_RESTORE_ATTEMPTS)
 
     def identity(self):
         return {
