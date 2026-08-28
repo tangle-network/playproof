@@ -1,0 +1,36 @@
+# The only contrast the earlier studies left unresolved, run at the sample size
+# the statistics actually require.
+#
+# `BOOTSTRAP_GATE_MIN_N` in @tangle-network/agent-eval is 20, and every study in
+# this repo so far ran 1 to 3 replicates. `pairedBootstrap` returned
+# `gateEligible: false` for all of them, which is the correct answer: opus over
+# haiku cleared zero, opus over sonnet did not, and neither was admissible.
+#
+# haiku is not here at 20 replicates. It scored 4 and 60 against opus's 46,124
+# and 46,216, and paying for power on a 1000x gap buys nothing. It runs as a
+# two-cell CANARY in gate-canary-2048.matrix instead, pooled with this file: a
+# control that costs almost nothing and would catch a harness fault that made
+# every arm look equally good.
+#
+# THREAT TO VALIDITY, stated rather than hidden. Every replicate runs at ONE
+# seed, so the tile sequence is identical and all the variance measured here is
+# variance in what the agent BUILT. That is the right question for comparing
+# profiles, and it means the answer does not generalise across boards. A seed
+# sweep multiplies the cost by the number of seeds and is a separate study.
+profile.opus   harness=./harnesses/claude-code author=./harnesses/author-policy model=claude-opus-5   buildMin=6 transport=persistent
+profile.sonnet harness=./harnesses/claude-code author=./harnesses/author-policy model=claude-sonnet-5 buildMin=6 transport=persistent
+
+game.puzzle adapter=native-2048 target=2048
+
+# Horizon 20000, not 2000. At 2000 an opus cell is TRUNCATED: it scored 46,170
+# with the board still alive, and the same policy reaches 367,272 over 13,988
+# decisions when allowed to finish. Sonnet's programs are not truncated at 2000
+# because they die at 317 and 609 decisions. Comparing a truncated arm against
+# an untruncated one biases the result toward the arm that dies early, which is
+# exactly backwards.
+objective.score goal=maximize:score horizon=20000 budgetUsd=4
+
+protocol.det frameskip=1 sticky=0 seeds=1 queue=8 empty=noop pace=0
+sensor.ascii pixels=off channels=-
+
+reps 20

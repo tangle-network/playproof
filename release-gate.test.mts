@@ -71,12 +71,30 @@ function gate(overrides: Partial<GateInput> = {}): GateInput {
   assert.match(decision.reasons.join('\n'), /concluded failure/u)
 }
 {
+  // A red REQUIRED job still refuses. ALE stands in for the property; RetroArch
+  // used to and no longer can, for the reason asserted immediately below.
+  const jobs = greenJobs().map((job) =>
+    job.name.startsWith('ALE') ? { ...job, conclusion: 'failure' } : job,
+  )
+  const decision = decideRelease(gate({ jobs }))
+  assert.equal(decision.verdict, 'refuse')
+  assert.match(decision.reasons.join('\n'), /"ALE Atari adapter on a real emulator" concluded failure/u)
+}
+{
+  // THE QUARANTINE, asserted rather than left implicit. A red RetroArch job now
+  // allows a release, because its same-process replay assertion failed roughly
+  // 40% of the time and a gate that is rerun until green launders a red into a
+  // green. This case fails the moment RetroArch is restored to the required
+  // set, which is what makes the restoration a conscious act.
   const jobs = greenJobs().map((job) =>
     job.name.startsWith('RetroArch') ? { ...job, conclusion: 'failure' } : job,
   )
   const decision = decideRelease(gate({ jobs }))
-  assert.equal(decision.verdict, 'refuse')
-  assert.match(decision.reasons.join('\n'), /"RetroArch black-box host adapter on a real emulator" concluded failure/u)
+  assert.equal(
+    decision.verdict,
+    'allow',
+    'RetroArch is quarantined; restoring it to requiredCiJobs must break this case on purpose',
+  )
 }
 
 // Case 3 of 3, and the dangerous one: ci has no result at all for this commit.
@@ -146,17 +164,20 @@ function gate(overrides: Partial<GateInput> = {}): GateInput {
   assert.match(decision.reasons.join('\n'), /"Gymnasium environment adapter on real environments" concluded skipped/u)
 }
 
-// The measured shape of the RetroArch job: its asset install is
-// `continue-on-error` and its adapter gate is conditional, so the job can
-// conclude success with the emulator never driven. A green job alone does not
-// release; the step inside it must have run.
+// A green job alone does not release; the step inside it must have run.
+//
+// This shape was measured on the RetroArch job, whose asset install is
+// `continue-on-error` and whose adapter gate is conditional, so it could
+// conclude success with the emulator never driven. RetroArch is quarantined out
+// of the required set, so the property is asserted here on stable-retro, which
+// is still required and has the same conditional-gate shape.
 {
   const jobs = greenJobs().map((job) =>
-    job.name.startsWith('RetroArch')
+    job.name.startsWith('stable-retro')
       ? {
           ...job,
           steps: [
-            { name: 'Install RetroArch, the gambatte core, and the free ROM', conclusion: 'failure' },
+            { name: 'Install the emulator and the free ROM', conclusion: 'failure' },
             { name: 'Adapter gate', conclusion: 'skipped' },
             { name: 'Report an unusable pool', conclusion: 'success' },
           ],
