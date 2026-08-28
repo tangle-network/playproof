@@ -285,6 +285,17 @@ export function createStreamSandboxDriver(options: StreamSandboxDriverOptions): 
     // The agent's own output is not an action channel: actions arrive through
     // the file. Its stderr is still kept, bounded, because it is the only thing
     // that can explain an agent which never wrote an action.
+    // A killed child's pipes can emit `error` after the fact, and a stream with
+    // no error listener throws to the top of the process. MEASURED: a 42-cell
+    // study died at cell 3 on an unhandled `EPIPE` from one of these, after two
+    // cells had already cost twenty minutes each. The child's fate is already
+    // reported through `health()`, so these listeners record and do not rethrow.
+    started.stdout?.on('error', (error: Error) => {
+      if (agentStderr.length < 4096) agentStderr += `\n[stdout] ${error.message}`
+    })
+    started.stderr?.on('error', (error: Error) => {
+      if (agentStderr.length < 4096) agentStderr += `\n[stderr] ${error.message}`
+    })
     started.stdout?.resume()
     started.stderr?.setEncoding('utf8')
     started.stderr?.on('data', (chunk: string) => {

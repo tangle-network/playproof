@@ -214,6 +214,10 @@ function account(event) {
 publish()
 
 const child = spawn(command, args, { cwd: sandbox, stdio: ['ignore', 'pipe', 'inherit'] })
+// A pipe to a killed child emits `error`, and a stream with no listener throws
+// to the top of the process. This launcher's whole job is to outlive its agent
+// long enough to publish the meter, so it cannot die on the agent's pipe.
+child.stdout.on('error', (error) => console.error(`playproof: agent stdout: ${error.message}`))
 let carry = ''
 child.stdout.setEncoding('utf8')
 child.stdout.on('data', (chunk) => {
