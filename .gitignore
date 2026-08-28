@@ -20,3 +20,6 @@ runs/
 
 # Local Python environment for adapters that need one (gymnasium, ALE).
 .venv/
+
+# pnpm writes a store here when a container runs install against a mounted repo.
+.pnpm-store/

@@ -12,6 +12,7 @@
  * spend.
  */
 import { strict as assert } from 'node:assert'
+import { resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
@@ -24,7 +25,19 @@ import { RetroRpc } from './adapters/retro-rpc'
 import { bundledReference, makeStableRetro, type RetroState, type StableRetro } from './adapters/stable-retro'
 
 const GAME = 'Airstriker-Genesis'
-const python = process.env.PLAYPROOF_PYTHON ?? 'python3'
+/**
+ * The interpreter, resolved against the CALLER's directory.
+ *
+ * A probe below runs with `cwd: tmpdir()` so it cannot import from the repo by
+ * accident, which means a relative `PLAYPROOF_PYTHON` never resolves and the
+ * gate reports the package missing when the real fault is the path. Measured:
+ * `PLAYPROOF_PYTHON=./.venv/bin/python` produced "stable-retro is not
+ * importable", advising an install of software that was already installed.
+ *
+ * A bare name like `python3` is left alone for PATH lookup.
+ */
+const rawPython = process.env.PLAYPROOF_PYTHON ?? 'python3'
+const python = rawPython.includes('/') ? resolve(rawPython) : rawPython
 
 /**
  * Probe from a temporary directory, never from the repository root: Playproof's
