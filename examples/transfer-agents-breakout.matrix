@@ -1,0 +1,10 @@
+# The other half. frameskip 4 is the clock Breakout's packaged reference was
+# recorded at; any other value makes its contract underivable.
+profile.opus   harness=./harnesses/claude-code author=./harnesses/author-policy model=claude-opus-5   buildMin=6 transport=persistent
+profile.sonnet harness=./harnesses/claude-code author=./harnesses/author-policy model=claude-sonnet-5 buildMin=6 transport=persistent
+
+game.brick adapter=ale target=breakout
+objective.score goal=maximize:score horizon=3000 budgetUsd=4
+protocol.det frameskip=4 sticky=0 seeds=1 queue=8 empty=noop pace=0
+sensor.ascii pixels=off channels=-
+reps 2

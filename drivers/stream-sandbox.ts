@@ -134,6 +134,11 @@ export interface StreamHealth {
   costUsd: number | null
   /** Tokens the agent says it has spent, or null when it did not say. */
   tokens: number | null
+  /** Input and output tokens apart, and turns taken. A ratio is diagnostic:
+   *  1.8M in against 72 out is an agent reading, not one writing. */
+  inputTokens: number | null
+  outputTokens: number | null
+  turns: number | null
   /**
    * Which credential path the agent used, as its launcher reported it.
    *
@@ -408,16 +413,30 @@ export function createStreamSandboxDriver(options: StreamSandboxDriverOptions): 
    * Written when the agent exits, so it is absent for a cell read while the
    * agent still runs. Absence is reported as absence.
    */
-  function reportedMeter(): { costUsd: number | null; tokens: number | null; authMode: 'api-key' | 'oauth' | null } {
+  function reportedMeter(): {
+    costUsd: number | null
+    tokens: number | null
+    inputTokens: number | null
+    outputTokens: number | null
+    turns: number | null
+    authMode: 'api-key' | 'oauth' | null
+  } {
     const nonNegative = (value: unknown): number | null =>
       typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
     try {
       const parsed: unknown = JSON.parse(readFileSync(join(dir, 'agent-cost.json'), 'utf8'))
-      const meter = parsed as { usd?: unknown; tokens?: unknown; authMode?: unknown }
+      const meter = parsed as Record<string, unknown>
       const mode = meter.authMode === 'api-key' || meter.authMode === 'oauth' ? meter.authMode : null
-      return { costUsd: nonNegative(meter.usd), tokens: nonNegative(meter.tokens), authMode: mode }
+      return {
+        costUsd: nonNegative(meter.usd),
+        tokens: nonNegative(meter.tokens),
+        inputTokens: nonNegative(meter.inputTokens),
+        outputTokens: nonNegative(meter.outputTokens),
+        turns: nonNegative(meter.turns),
+        authMode: mode,
+      }
     } catch {
-      return { costUsd: null, tokens: null, authMode: null }
+      return { costUsd: null, tokens: null, inputTokens: null, outputTokens: null, turns: null, authMode: null }
     }
   }
 

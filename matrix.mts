@@ -11,8 +11,8 @@
  * Env knobs:
  *   PLAYPROOF_PYTHON   interpreter that runs an emulator worker (default python3)
  */
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { copyFile, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { cellName, enumerateCells, parseMatrix } from './matrix'
 import { assertJoinable, blockedResult, effectiveArms, generalization, runCell, type CellResult } from './matrix-run'
 
@@ -115,6 +115,41 @@ for (const [index, cell] of cells.entries()) {
     row = blockedResult(cell, 'episode-failed', (error as Error).message, Date.now() - cellStarted)
   } finally {
     clearInterval(heartbeat)
+  }
+  // Keep what the cell produced. The authoring sandbox is a temp directory
+  // that is reclaimed, so the program an agent wrote and the transcript of how
+  // it wrote it are lost the moment the run ends. Those are the two artifacts
+  // an autopsy of a build actually needs.
+  if (row.build?.policy != null && outPath !== undefined) {
+    const keep = join(dirname(outPath), 'artifacts', cellName(cell).replace(/[^\w.-]+/gu, '_'))
+    try {
+      await mkdir(keep, { recursive: true })
+      const from = dirname(row.build.policy)
+      for (const name of await readdir(from)) {
+        // Observation files are the game talking, not the agent working, and a
+        // practice run writes thousands of them.
+        if (name === 'observations' || name === 'latest.json') continue
+        const source = join(from, name)
+        if ((await stat(source)).isDirectory()) continue
+        await copyFile(source, join(keep, name))
+      }
+    } catch (error) {
+      console.error(`[${index + 1}/${cells.length}] could not keep artifacts: ${(error as Error).message}`)
+    }
+  }
+  // The raw trace is the whole episode. It goes beside the artifact as JSONL,
+  // one decision per line, so the row stays readable and nothing is lost: a
+  // 20,000-decision run would otherwise make the study file unopenable.
+  if (row.telemetry !== null && row.telemetry.trace.length > 0 && outPath !== undefined) {
+    const slug = cellName(cell).replace(/[^\w.-]+/gu, '_')
+    const tracePath = join(dirname(outPath), 'traces', `${slug}.jsonl`)
+    try {
+      await mkdir(dirname(tracePath), { recursive: true })
+      await writeFile(tracePath, row.telemetry.trace.map((d) => JSON.stringify(d)).join('\n') + '\n')
+      row.telemetry = { ...row.telemetry, trace: [], tracePath }
+    } catch (error) {
+      console.error(`[${index + 1}/${cells.length}] could not write the trace: ${(error as Error).message}`)
+    }
   }
   rows.push(row)
   const headline = row.status === 'played'

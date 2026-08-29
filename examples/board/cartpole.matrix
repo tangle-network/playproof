@@ -1,0 +1,11 @@
+# cartpole: one game of the board. Its clock and seed are the ones its packaged
+# reference was recorded at; any other value makes the contract underivable.
+profile.cycler harness=none policy=./examples/policies/cycler.mjs note=cycles-the-stated-vocabulary
+profile.masher harness=none policy=./examples/policies/masher.mjs note=one-word-baseline
+
+game.pole adapter=gymnasium target=CartPole-v1
+objective.steps goal=maximize:steps horizon=200 budgetUsd=1
+protocol.det frameskip=1 sticky=0 seeds=1 seed0=7
+sensor.ascii pixels=off channels=-
+
+reps 1

@@ -156,6 +156,17 @@ export interface CellResult {
      */
     authMode: 'api-key' | 'oauth' | null
   } | null
+  /**
+   * Everything the run measured that a single number cannot carry.
+   *
+   * A row answers "how did it do". This answers "what happened", which is the
+   * question every autopsy in this work has actually needed. The data was
+   * always collected and then discarded at this boundary: `latencyMs` is a full
+   * per-decision array, the evidence watcher holds every channel at every
+   * decision, and driver health is a structured record that was being flattened
+   * into one sentence of prose.
+   */
+  telemetry: CellTelemetry | null
   scoreField: string | null
   /** Which way is better on that channel. A minimize goal ranks inverted. */
   scoreDirection: 'maximize' | 'minimize' | null
@@ -423,6 +434,9 @@ export function blockedResult(cell: MatrixCell, reason: BlockedReason, detail: s
     tokens: null,
     usd: 0,
     build: null,
+    // A cell that never played measured nothing. Null, not an empty spread: an
+    // absent distribution and one with no spread are different facts.
+    telemetry: null,
     // A blocked cell still states what it WOULD have scored on, so a reader can
     // see that an excluded row and a played row were aimed at the same channel.
     scoreField: null,
@@ -498,6 +512,8 @@ export async function runCell(cell: MatrixCell, options: RunCellOptions = {}): P
   // practice game nobody scores, and the program it leaves behind is what the
   // scored episode actually runs. The agent is not running by then.
   let authored: CellResult['build'] = null
+  /** Build-phase token split, kept apart from the row's headline totals. */
+  let authoredDetail: { inputTokens: number | null; outputTokens: number | null; turns: number | null } | null = null
   let policyCommand: string | null = null
   if (cell.profile.author !== undefined) {
     const attempt = await authorPolicy(cell, options, now)
@@ -508,6 +524,7 @@ export async function runCell(cell: MatrixCell, options: RunCellOptions = {}): P
       policy: attempt.policy,
       authMode: attempt.authMode,
     }
+    authoredDetail = attempt.detailTokens
     if (attempt.policy === null) {
       // Blocked, never scored zero. A profile that built nothing did not play
       // badly; it produced no player, and those are different findings.
@@ -553,6 +570,8 @@ export async function runCell(cell: MatrixCell, options: RunCellOptions = {}): P
     const watched = watchEvidence(built.game)
     let record: EpisodeRecord
     let actionsHash: string | null
+    /** Every word the driver played, in order, for the raw trace. */
+    let actions: readonly string[] = []
     try {
       const played = await playEpisode(
         watched.game,
@@ -566,6 +585,7 @@ export async function runCell(cell: MatrixCell, options: RunCellOptions = {}): P
       )
       record = played.record
       actionsHash = played.log.head()
+      actions = played.log.inputs()
     } catch (error) {
       return blockedResult(cell, 'episode-failed', (error as Error).message, now() - started)
     }
@@ -590,6 +610,33 @@ export async function runCell(cell: MatrixCell, options: RunCellOptions = {}): P
       usd: meter.metered && meter.costUsd === null ? null : (meter.costUsd ?? 0) + record.spentUsd,
       authMode: meter.authMode,
       build: authored,
+      telemetry: {
+        latencyMs: spreadOf(record.latencyMs),
+        scoreSeries: spreadOf(channel(watched.snapshots, goal.field)),
+        channelsLast: watched.snapshots[watched.snapshots.length - 1] ?? {},
+        inputs: {
+          total: record.inputStats.inputs,
+          distinct: Math.round(record.inputStats.uniqueRatio * record.inputStats.inputs),
+          uniqueRatio: record.inputStats.uniqueRatio,
+        },
+        milestones: built.contract.milestones.map((milestone) => ({
+          id: milestone.id,
+          verified: record.verified.includes(milestone.id),
+        })),
+        health: healthOf(driver),
+        build: authoredDetail,
+        // The evidence watcher records the state BEFORE the first input as
+        // snapshot 0, so decision n is snapshot n+1. Off by one here would
+        // attribute every outcome to the input before the one that caused it.
+        trace: actions.map((input: string, i: number) => ({
+          turn: i + 1,
+          input,
+          latencyMs: record.latencyMs[i] ?? null,
+          channels: watched.snapshots[i + 1] ?? {},
+        })),
+        budgetExhausted: record.budgetExhausted,
+        spentUsd: record.spentUsd,
+      },
       cleared: record.gameOver,
       verified: record.verified,
       milestones: record.score,
@@ -692,6 +739,7 @@ async function authorPolicy(
   minutes: number
   policy: string | null
   authMode: 'api-key' | 'oauth' | null
+  detailTokens: { inputTokens: number | null; outputTokens: number | null; turns: number | null }
   detail: string | null
 }> {
   const profile = cell.profile
@@ -717,6 +765,7 @@ async function authorPolicy(
       minutes: 0,
       policy: null,
       authMode: null,
+      detailTokens: { inputTokens: null, outputTokens: null, turns: null },
       detail: `no practice game: ${(error as Error).message}`,
     }
   }
@@ -787,14 +836,128 @@ async function authorPolicy(
       ? 'the agent left a policy that is not executable'
       : 'the agent left no policy'
   }
+  const full = healthOf(driver) ?? {}
+  const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
   return {
     usd: meter.costUsd,
     tokens: meter.tokens,
     authMode: meter.authMode,
+    detailTokens: {
+      inputTokens: num(full.inputTokens),
+      outputTokens: num(full.outputTokens),
+      turns: num(full.turns),
+    },
     minutes: (now() - started) / 60_000,
     policy,
     detail,
   }
+}
+
+/** One decision, as it happened. */
+export interface DecisionTrace {
+  turn: number
+  /** The word the driver emitted and the game accepted. */
+  input: string
+  /** Wall clock this decision took, in milliseconds. */
+  latencyMs: number | null
+  /** Every evidence channel after the input was applied. */
+  channels: Record<string, number>
+}
+
+/** A distribution, reported so a reader can see shape rather than a mean. */
+export interface Spread {
+  n: number
+  min: number
+  p50: number
+  p90: number
+  p99: number
+  max: number
+  mean: number
+  /** Equal-width buckets over [min, max], for a histogram. Empty when n < 2. */
+  histogram: { from: number; to: number; count: number }[]
+}
+
+/** What one cell measured beyond its headline number. */
+export interface CellTelemetry {
+  /** Wall clock per decision, in milliseconds. */
+  latencyMs: Spread | null
+  /** The scored channel at every decision, so a trajectory is visible. */
+  scoreSeries: Spread | null
+  /** Every evidence channel this game published, and its last value. */
+  channelsLast: Record<string, number>
+  /** Inputs the driver emitted, and how varied they were. */
+  inputs: { total: number; distinct: number; uniqueRatio: number }
+  /** Per-milestone cost, as the contract recorded it. */
+  milestones: { id: string; verified: boolean }[]
+  /** The transport's own record, structured rather than prose. */
+  health: Record<string, unknown> | null
+  /** Build-phase detail when the profile authored its player. */
+  build: { inputTokens: number | null; outputTokens: number | null; turns: number | null } | null
+  /**
+   * Every decision, raw, in the order it happened.
+   *
+   * A summary answers "what shape"; this answers "what happened at decision
+   * 811", which is the question every autopsy in this work has ended up
+   * asking. Each entry carries the turn, the word played, that decision's
+   * latency, and every evidence channel as it stood afterwards.
+   *
+   * It is the whole episode, so a caller writing it to disk should put it
+   * beside the row rather than inside it.
+   */
+  trace: DecisionTrace[]
+  /**
+   * Where the trace was written, when a runner moved it out of the row.
+   *
+   * Null while it is still inline. A reader that finds `trace` empty and this
+   * set knows the decisions exist rather than that there were none.
+   */
+  tracePath?: string
+  budgetExhausted: boolean
+  spentUsd: number
+}
+
+/**
+ * Summarise a series without hiding its shape.
+ *
+ * A mean alone has hidden every interesting result in this work: opus looked
+ * consistent to 0.2% at a censored horizon and varied 5.3x uncensored. Quantiles
+ * and a histogram make that visible on the row instead of in a later autopsy.
+ */
+export function spreadOf(values: readonly number[], buckets = 12): Spread | null {
+  if (values.length === 0) return null
+  const sorted = [...values].sort((a, b) => a - b)
+  const at = (q: number): number => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]!
+  const min = sorted[0]!
+  const max = sorted[sorted.length - 1]!
+  const histogram: { from: number; to: number; count: number }[] = []
+  if (sorted.length > 1 && max > min) {
+    const width = (max - min) / buckets
+    for (let i = 0; i < buckets; i += 1) {
+      const from = min + i * width
+      const to = i === buckets - 1 ? max : from + width
+      histogram.push({
+        from,
+        to,
+        count: sorted.filter((v) => v >= from && (i === buckets - 1 ? v <= to : v < to)).length,
+      })
+    }
+  }
+  return {
+    n: sorted.length,
+    min,
+    p50: at(0.5),
+    p90: at(0.9),
+    p99: at(0.99),
+    max,
+    mean: sorted.reduce((a, b) => a + b, 0) / sorted.length,
+    histogram,
+  }
+}
+
+/** Read a driver's own health record, whatever transport it is. */
+function healthOf(driver: AgentDriver): Record<string, unknown> | null {
+  const reporter = driver as { health?: () => Record<string, unknown> }
+  return typeof reporter.health === 'function' ? reporter.health() : null
 }
 
 function meterOf(driver: AgentDriver): {

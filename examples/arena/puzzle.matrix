@@ -1,0 +1,17 @@
+# puzzle on the arena board. The clock and seed are the ones this game's packaged
+# reference was recorded at; any other value makes its contract underivable.
+#
+# Two axes vary, not one. `buildMin` asks whether more time to BUILD produces a
+# better player, which is a different question from which model is stronger and
+# the one an efficiency study actually needs.
+profile.opus-3    harness=./harnesses/claude-code author=./harnesses/author-policy model=claude-opus-5   buildMin=3 transport=persistent
+profile.opus-8    harness=./harnesses/claude-code author=./harnesses/author-policy model=claude-opus-5   buildMin=8 transport=persistent
+profile.sonnet-3  harness=./harnesses/claude-code author=./harnesses/author-policy model=claude-sonnet-5 buildMin=3 transport=persistent
+profile.sonnet-8  harness=./harnesses/claude-code author=./harnesses/author-policy model=claude-sonnet-5 buildMin=8 transport=persistent
+
+game.puzzle adapter=native-2048 target=2048
+objective.score goal=maximize:score horizon=20000 budgetUsd=4
+protocol.det frameskip=1 sticky=0 seeds=1
+sensor.ascii pixels=off channels=-
+
+reps 1
