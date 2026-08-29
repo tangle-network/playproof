@@ -18,6 +18,20 @@ export interface CliAgentRequest {
    * a CLI that ignores this key behaves exactly as before.
    */
   images?: readonly ObservationImage[]
+  /**
+   * The words this game accepts, when the driver was told them.
+   *
+   * A policy that guesses its vocabulary writes illegal words, every one is
+   * substituted, and the run reads as a player that did nothing rather than one
+   * that was never told the rules. The streaming transport already states this
+   * in `brief.json`; this is the same fact on the other transports.
+   *
+   * MEASURED: a control that cycles 2048's four words scored 1948 there and 0
+   * on ALE Breakout across three replicates, with `distinctInputs=1` and no
+   * lives lost, because Breakout's words are NOOP, FIRE, RIGHT and LEFT and
+   * none of the four it emitted was legal.
+   */
+  commands?: readonly string[]
   /** JSON-safe decision context; cancellation remains process-local. */
   context: Readonly<Omit<AgentDecisionContext, 'signal' | 'observation'>>
 }
@@ -96,6 +110,11 @@ export function createCliAgentDriver(options: CliAgentDriverOptions): AgentDrive
         frame,
         history: history.map((entry) => ({ ...entry })),
         ...(images.length === 0 ? {} : { images: images.map((image) => ({ ...image })) }),
+        // Stated, not guessed. Omitted when the caller named no vocabulary, so
+        // a policy can still tell "any word goes" from "these words go".
+        ...(options.commands === undefined || options.commands.length === 0
+          ? {}
+          : { commands: [...options.commands] }),
         context: {
           turn: context.turn,
           maxTurns: context.maxTurns,

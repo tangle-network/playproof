@@ -863,26 +863,48 @@ export async function runMatrix(definition: MatrixDefinition, options: RunCellOp
  * different protocols or horizons are not.
  */
 export function assertJoinable(rows: readonly CellResult[]): void {
-  const protocols = new Set(rows.map((r) => `${r.protocol}:frameskip=${r.frameskip},sticky=${r.sticky}`))
-  if (protocols.size > 1) {
-    throw new Error(
-      `these rows were measured under ${protocols.size} protocols and cannot be pooled: ${[...protocols].sort().join(' | ')}`,
-    )
-  }
-  // The sensor is a 43x variable on one measured game. Pooling across it is
-  // pooling across the dominant term.
-  const sensors = new Set(rows.map((r) => `${r.sensor}:${r.sensorDetail}`))
-  if (sensors.size > 1) {
-    throw new Error(
-      `these rows were measured through ${sensors.size} sensors and cannot be pooled: ${[...sensors].sort().join(' | ')}`,
-    )
-  }
-  const objectives = new Set(rows.map((r) => r.objective))
-  if (objectives.size > 1) {
-    throw new Error(
-      `these rows were measured at ${objectives.size} objectives, so their clocks differ and they cannot be pooled:`
-      + ` ${[...objectives].sort().join(', ')}`,
-    )
+  // Scoped PER GAME, because that is the comparison the transfer statistic
+  // actually makes. It ranks profiles inside each game and then correlates the
+  // orders; a raw score never crosses a game boundary. Two games therefore
+  // SHOULD differ in clock, sensor and objective, and usually must: a packaged
+  // reference pins the clock it was recorded at, so ALE Breakout is only
+  // derivable at frameskip 4 while native-2048 runs at 1.
+  //
+  // Checked across the whole pool, this refused exactly the study it exists to
+  // serve. Measured: a two-game run of 2048 and Breakout completed all twelve
+  // cells and was then refused for having "2 protocols", which were simply the
+  // two games' own clocks.
+  //
+  // What is still refused is two clocks INSIDE one game, which is a genuine
+  // pooling error: those rows are averaged together and the dominant term
+  // disappears into the mean.
+  const games = new Set(rows.map((row) => row.game))
+  for (const game of games) {
+    const inGame = rows.filter((row) => row.game === game)
+    const where = games.size === 1 ? 'these rows' : `the rows for game "${game}"`
+    const protocols = new Set(inGame.map((r) => `${r.protocol}:frameskip=${r.frameskip},sticky=${r.sticky}`))
+    if (protocols.size > 1) {
+      throw new Error(
+        `${where} were measured under ${protocols.size} protocols and cannot be pooled:`
+        + ` ${[...protocols].sort().join(' | ')}`,
+      )
+    }
+    // The sensor is a 43x variable on one measured game. Pooling across it is
+    // pooling across the dominant term.
+    const sensors = new Set(inGame.map((r) => `${r.sensor}:${r.sensorDetail}`))
+    if (sensors.size > 1) {
+      throw new Error(
+        `${where} were measured through ${sensors.size} sensors and cannot be pooled:`
+        + ` ${[...sensors].sort().join(' | ')}`,
+      )
+    }
+    const objectives = new Set(inGame.map((r) => r.objective))
+    if (objectives.size > 1) {
+      throw new Error(
+        `${where} were measured at ${objectives.size} objectives, so their clocks differ and they cannot be`
+        + ` pooled: ${[...objectives].sort().join(', ')}`,
+      )
+    }
   }
 }
 
