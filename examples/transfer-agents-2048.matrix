@@ -1,0 +1,12 @@
+# Half of a two-game transfer study, played by real profiles.
+#
+# The cheap controls tie at 0 on Breakout, and two tied players have no order,
+# so a rank correlation has nothing to correlate. These build a player instead.
+profile.opus   harness=./harnesses/claude-code author=./harnesses/author-policy model=claude-opus-5   buildMin=6 transport=persistent
+profile.sonnet harness=./harnesses/claude-code author=./harnesses/author-policy model=claude-sonnet-5 buildMin=6 transport=persistent
+
+game.puzzle adapter=native-2048 target=2048
+objective.score goal=maximize:score horizon=20000 budgetUsd=4
+protocol.det frameskip=1 sticky=0 seeds=1 queue=8 empty=noop pace=0
+sensor.ascii pixels=off channels=-
+reps 2
