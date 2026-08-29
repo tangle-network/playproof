@@ -1,0 +1,11 @@
+# The other half. Breakout runs at frameskip 4 because that is the clock its
+# packaged reference was recorded at; any other value makes the contract
+# underivable and the cell is blocked rather than scored zero.
+profile.cycler harness=none policy=./examples/policies/cycler.mjs note=cycles-the-vocabulary
+profile.masher harness=none policy=./examples/policies/masher.mjs note=one-word-baseline
+
+game.brick adapter=ale target=breakout
+objective.score goal=maximize:score horizon=300 budgetUsd=1
+protocol.det frameskip=4 sticky=0 seeds=1
+sensor.ascii pixels=off channels=-
+reps 3

@@ -414,6 +414,11 @@ export function createPersistentCliDriver(options: PersistentCliDriverOptions): 
         frame,
         history: history.map((entry) => ({ ...entry })),
         ...(images.length === 0 ? {} : { images: images.map((image) => ({ ...image })) }),
+        // Stated, not guessed. Omitted when the caller named no vocabulary, so
+        // a policy can still tell "any word goes" from "these words go".
+        ...(options.commands === undefined || options.commands.length === 0
+          ? {}
+          : { commands: [...options.commands] }),
         context: {
           turn: context.turn,
           maxTurns: context.maxTurns,
