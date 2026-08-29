@@ -14,7 +14,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { cellName, enumerateCells, parseMatrix } from './matrix'
-import { assertJoinable, effectiveArms, generalization, runCell, type CellResult } from './matrix-run'
+import { assertJoinable, blockedResult, effectiveArms, generalization, runCell, type CellResult } from './matrix-run'
 
 // SEVERAL definitions, pooled into one study.
 //
@@ -42,6 +42,50 @@ for (const path of definitionPaths) {
 const definitionPath = definitionPaths.join(' ')
 
 const rows: CellResult[] = []
+
+/**
+ * Write what has finished so far.
+ *
+ * Called after EVERY cell, not once at the end. A 42-cell study died at cell 3
+ * on an unhandled pipe error and left no artifact at all, so two cells that had
+ * each cost twenty minutes were lost after they had already succeeded. Work
+ * that is done should survive whatever happens to the work that is not.
+ *
+ * `partial` marks a file whose run has not finished, so a reader never mistakes
+ * an interrupted study for a complete one.
+ */
+async function persist(partial: boolean): Promise<void> {
+  const protocolsSeen = new Set(rows.map((row) => row.protocol))
+  const artifact = {
+    definition: definitionPath,
+    cells: rows.length,
+    expected: cells.length,
+    partial,
+    rows,
+    summary: partial || protocolsSeen.size !== 1
+      ? { transfer: null, arms: effectiveArms(rows), note: partial ? 'run did not finish' : 'several protocols' }
+      : { transfer: generalization(rows), arms: effectiveArms(rows) },
+  }
+  const text = `${JSON.stringify(artifact, null, 2)}\n`
+  if (outPath === undefined) return
+  await mkdir(dirname(outPath), { recursive: true })
+  await writeFile(outPath, text)
+}
+
+// A crash must not take finished work with it. What is on disk is written
+// first, then the failure is reported and the exit code still says it failed:
+// keeping the data is not the same as pretending the run succeeded.
+for (const signal of ['uncaughtException', 'unhandledRejection'] as const) {
+  process.on(signal, (error: unknown) => {
+    void persist(true).finally(() => {
+      console.error(`\nmatrix: ${signal} after ${rows.length} of ${cells.length} cells`)
+      console.error(error instanceof Error ? (error.stack ?? error.message) : String(error))
+      if (outPath !== undefined) console.error(`matrix: wrote ${rows.length} finished cells to ${outPath}`)
+      process.exit(1)
+    })
+  })
+}
+
 for (const [index, cell] of cells.entries()) {
   // A cell is announced BEFORE it runs, and says it is alive while it runs.
   //
@@ -63,6 +107,12 @@ for (const [index, cell] of cells.entries()) {
   let row: CellResult
   try {
     row = await runCell(cell)
+  } catch (error) {
+    // `runCell` returns a blocked row for everything it can foresee. This is
+    // for what it cannot: one cell that throws costs one cell, and the study
+    // keeps going and keeps what it has.
+    console.error(`[${index + 1}/${cells.length}] threw: ${(error as Error).message}`)
+    row = blockedResult(cell, 'episode-failed', (error as Error).message, Date.now() - cellStarted)
   } finally {
     clearInterval(heartbeat)
   }
@@ -95,14 +145,9 @@ const summary = protocols.size === 1
   : { transfer: null, arms: effectiveArms(rows), note: `${protocols.size} protocols: summarise each on its own` }
 if (protocols.size === 1) assertJoinable(rows)
 
-const artifact = { definition: definitionPath, cells: rows.length, rows, summary }
-if (outPath !== undefined) {
-  await mkdir(dirname(outPath), { recursive: true })
-  await writeFile(outPath, `${JSON.stringify(artifact, null, 2)}\n`)
-  console.error(`wrote ${outPath}`)
-} else {
-  process.stdout.write(`${JSON.stringify(artifact, null, 2)}\n`)
-}
+await persist(false)
+if (outPath !== undefined) console.error(`wrote ${outPath}`)
+else process.stdout.write(`${JSON.stringify({ definition: definitionPath, cells: rows.length, rows, summary }, null, 2)}\n`)
 
 const blocked = rows.filter((row) => row.status === 'blocked').length
 console.error(`matrix: ${rows.length - blocked} played, ${blocked} blocked`)

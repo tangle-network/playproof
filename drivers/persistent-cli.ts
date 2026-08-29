@@ -236,9 +236,26 @@ export function createPersistentCliDriver(options: PersistentCliDriverOptions): 
     const running = child
     child = null
     if (running !== null) {
-      running.stdout.removeAllListeners()
-      running.stderr.removeAllListeners()
-      running.stdin.removeAllListeners()
+      // Drop the DATA listeners and keep an error listener on every pipe.
+      //
+      // `removeAllListeners()` took the `error` handler with it, and the kill
+      // below makes a write to stdin fail. An in-flight write then completed
+      // with EPIPE on a socket that no longer had a listener, which Node turns
+      // into an unhandled `error` event and a dead process.
+      //
+      // MEASURED: three separate long studies died this way, each losing every
+      // finished cell, with a stack carrying no frame from this repository.
+      // The session's other three crashes were the same shape — an error path
+      // with nothing listening on it.
+      for (const pipe of [running.stdout, running.stderr, running.stdin]) {
+        pipe?.removeAllListeners('data')
+        pipe?.removeAllListeners('error')
+        pipe?.on('error', () => {
+          // A pipe to a process being killed is expected to fail. The session's
+          // outcome is already recorded by `end()`; this listener exists so the
+          // failure cannot escape as an unhandled event.
+        })
+      }
       running.kill('SIGKILL')
     }
   }

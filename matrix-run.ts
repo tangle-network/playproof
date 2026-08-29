@@ -402,7 +402,15 @@ function lastOf(values: readonly number[]): number | null {
   return values.length === 0 ? null : values[values.length - 1]!
 }
 
-function blockedResult(cell: MatrixCell, reason: BlockedReason, detail: string, wallMs: number): CellResult {
+/**
+ * A cell that did not play, with the reason it did not.
+ *
+ * Exported so a runner can build the same row for a fault `runCell` could not
+ * foresee. One cell that throws must cost one cell, not the study around it,
+ * and it must land in the artifact looking like every other refusal rather than
+ * as a gap a reader has to notice.
+ */
+export function blockedResult(cell: MatrixCell, reason: BlockedReason, detail: string, wallMs: number): CellResult {
   return {
     ...identity(cell),
     status: 'blocked',

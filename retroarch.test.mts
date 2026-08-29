@@ -22,6 +22,7 @@
  */
 import { strict as assert } from 'node:assert'
 import { createHash } from 'node:crypto'
+import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { attestRun } from './attestation'
 import { logFrom, observationOf } from './runtime'
@@ -58,18 +59,27 @@ const TRACE_INPUTS = 120
 
 
 function missing(): string | null {
-  // Hard platform guard, ahead of every other check. The RetroArch that
-  // Homebrew installs on macOS is an x86_64 build running under Rosetta, and
-  // it segfaults inside an environment callback during `retro_run`
-  // (KERN_INVALID_ADDRESS, repeatedly, with a crash dialog each time). The
-  // adapter is therefore unproven on darwin and this gate never launches an
-  // emulator there, even when the paths are set. Linux CI is the execution
-  // proof; see docs/adapters.md.
-  if (process.platform === 'darwin') {
-    return 'the RetroArch gate does not run on macOS: the x86_64 build under Rosetta segfaults during retro_run'
-  }
   if (!binary) return 'PLAYPROOF_RETROARCH is unset (path to the RetroArch executable)'
   if (!existsSync(binary)) return `PLAYPROOF_RETROARCH=${binary} does not exist`
+  // The macOS guard tests the ARCHITECTURE, because that is what the failure
+  // was about. An x86_64 RetroArch under Rosetta segfaults inside an
+  // environment callback during `retro_run` (KERN_INVALID_ADDRESS, repeatedly,
+  // with a crash dialog each time), and Homebrew installs exactly that build.
+  //
+  // A guard written as `platform === 'darwin'` states a broader claim than the
+  // evidence supports, and it cost real time: the universal build from
+  // libretro's own stable tree has a native arm64 slice that loads an arm64
+  // gambatte core and the free ROM without incident, which makes this gate
+  // runnable on an Apple Silicon machine and the bug underneath it reproducible
+  // off CI.
+  if (process.platform === 'darwin') {
+    const slices = spawnSync('lipo', ['-archs', binary], { encoding: 'utf8' })
+    const archs = (slices.stdout ?? '').trim().split(/\s+/u)
+    if (slices.status !== 0 || !archs.includes(process.arch === 'arm64' ? 'arm64' : 'x86_64')) {
+      return `the RetroArch gate needs a ${process.arch} slice; ${binary} has [${archs.join(', ') || 'unknown'}],`
+        + ' and an x86_64 build under Rosetta segfaults during retro_run'
+    }
+  }
   if (!core) return 'PLAYPROOF_RETROARCH_CORE is unset (path to a gambatte libretro core)'
   if (!existsSync(core)) return `PLAYPROOF_RETROARCH_CORE=${core} does not exist`
   if (!rom) return 'PLAYPROOF_ROM is unset (path to Libbet and the Magic Floor v0.08)'

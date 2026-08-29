@@ -16,6 +16,7 @@
  * observation image channel, and worker teardown. Zero model spend.
  */
 import { strict as assert } from 'node:assert'
+import { resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { deriveContract } from './authoring'
@@ -121,7 +122,19 @@ const DEMO_COLLISIONS = [
     collisions: 56, freeTurns: 21, jointCollision: false, family: 521838526464,
   },
 ]
-const python = process.env.PLAYPROOF_PYTHON ?? 'python3'
+/**
+ * The interpreter, resolved against the CALLER's directory.
+ *
+ * A probe below runs with `cwd: tmpdir()` so it cannot import from the repo by
+ * accident, which means a relative `PLAYPROOF_PYTHON` never resolves and the
+ * gate reports the package missing when the real fault is the path. Measured:
+ * `PLAYPROOF_PYTHON=./.venv/bin/python` produced "stable-retro is not
+ * importable", advising an install of software that was already installed.
+ *
+ * A bare name like `python3` is left alone for PATH lookup.
+ */
+const rawPython = process.env.PLAYPROOF_PYTHON ?? 'python3'
+const python = rawPython.includes('/') ? resolve(rawPython) : rawPython
 
 /** The bundled ROM must be present, not just the package. */
 function pythonHasAle(): boolean {
