@@ -160,7 +160,8 @@ for (const [index, cell] of cells.entries()) {
       + (row.build === null
         ? ''
         : ` build=${row.build.minutes.toFixed(1)}m/${row.build.tokens ?? '?'}tok/`
-          + `${row.build.usd === null ? `unbilled(${row.build.authMode ?? 'unknown'})` : `$${row.build.usd.toFixed(2)}`}`)
+          + `${row.build.usd === null ? `unbilled(${row.build.authMode ?? 'unknown'})` : `$${row.build.usd.toFixed(2)}`}`
+          + (row.build.practiceNote === null ? '' : ` [${row.build.practiceNote}]`))
       + ` tokens=${row.tokens ?? 'unmetered'}`
       // An absent cost reads as its REASON. `oauth` bills a plan and reports no
       // per-request figure, so "unbilled(oauth)" and "$0.0000" are different

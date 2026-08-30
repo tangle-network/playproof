@@ -146,6 +146,9 @@ export interface CellResult {
     tokens: number | null
     minutes: number
     policy: string | null
+    /** The board the agent practised on, and why it was that one. */
+    practiceSeed: number | null
+    practiceNote: string | null
     /**
      * Credential path the AUTHOR billed against.
      *
@@ -523,6 +526,8 @@ export async function runCell(cell: MatrixCell, options: RunCellOptions = {}): P
       minutes: attempt.minutes,
       policy: attempt.policy,
       authMode: attempt.authMode,
+      practiceSeed: attempt.practiceSeed,
+      practiceNote: attempt.practiceNote,
     }
     authoredDetail = attempt.detailTokens
     if (attempt.policy === null) {
@@ -739,6 +744,11 @@ async function authorPolicy(
   minutes: number
   policy: string | null
   authMode: 'api-key' | 'oauth' | null
+  /** The board the agent practised on. Equal to the graded seed when the game
+   *  offered no other, which makes that cell a weaker measurement. */
+  practiceSeed: number | null
+  /** Stated when practice fell back to the graded board. */
+  practiceNote: string | null
   detailTokens: { inputTokens: number | null; outputTokens: number | null; turns: number | null }
   detail: string | null
 }> {
@@ -750,23 +760,43 @@ async function authorPolicy(
   )
   const budgetMs = (profile.buildMinutes ?? 1) * 60_000
 
+  // Practice runs at a DIFFERENT board, so building a player is not memorising
+  // the graded one. Some games cannot offer a different board: a packaged
+  // reference derives its contract at one seed and nowhere else, so CartPole is
+  // buildable at seed 7 and refuses everywhere else.
+  //
+  // Measured: this offset silently cost an entire game. All four CartPole cells
+  // of a twenty-cell arena blocked with "mark survived-50-steps never fires",
+  // and the transfer statistic covered four games instead of five.
+  //
+  // So it degrades, visibly. The offset board is tried first; when the game
+  // refuses it, practice happens on the cell's own seed and the row SAYS SO.
+  // A cell whose author practised on the board it was graded on is a weaker
+  // measurement, and a reader has to be able to see which cells those are.
+  const build = options.build ?? buildAdapterGame
   let practice: BuiltGame
+  let practiceSeed = cell.seed + PRACTICE_SEED_OFFSET
+  let practiceNote: string | null = null
   try {
-    practice = await (options.build ?? buildAdapterGame)(
-      cell.game,
-      cell.protocol,
-      cell.sensor,
-      cell.seed + PRACTICE_SEED_OFFSET,
-    )
-  } catch (error) {
-    return {
-      usd: null,
-      tokens: null,
-      minutes: 0,
-      policy: null,
-      authMode: null,
-      detailTokens: { inputTokens: null, outputTokens: null, turns: null },
-      detail: `no practice game: ${(error as Error).message}`,
+    practice = await build(cell.game, cell.protocol, cell.sensor, practiceSeed)
+  } catch (offsetError) {
+    try {
+      practiceSeed = cell.seed
+      practice = await build(cell.game, cell.protocol, cell.sensor, practiceSeed)
+      practiceNote = `practised on the graded seed ${cell.seed}: this game does not build at another`
+        + ` (${(offsetError as Error).message})`
+    } catch (error) {
+      return {
+        usd: null,
+        tokens: null,
+        minutes: 0,
+        policy: null,
+        authMode: null,
+        practiceSeed: null,
+        practiceNote: null,
+        detailTokens: { inputTokens: null, outputTokens: null, turns: null },
+        detail: `no practice game: ${(error as Error).message}`,
+      }
     }
   }
 
@@ -810,7 +840,7 @@ async function authorPolicy(
       driver,
       cell.objective.budgetUsd,
       Math.min(PRACTICE_MAX_TURNS, Math.max(1, Math.ceil(budgetMs / paceMs))),
-      cell.seed + PRACTICE_SEED_OFFSET,
+      practiceSeed,
       stop.signal,
     )
   } catch {
@@ -842,6 +872,8 @@ async function authorPolicy(
     usd: meter.costUsd,
     tokens: meter.tokens,
     authMode: meter.authMode,
+    practiceSeed,
+    practiceNote,
     detailTokens: {
       inputTokens: num(full.inputTokens),
       outputTokens: num(full.outputTokens),
