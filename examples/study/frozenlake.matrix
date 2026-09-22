@@ -1,0 +1,19 @@
+# frozenlake in the generalization study.
+#
+# reps 5, not 1. Every result in this repository so far has been n=1, and
+# `BOOTSTRAP_GATE_MIN_N` in @tangle-network/agent-eval is 20, so nothing
+# measured here has ever been admissible. Five is what fits in a night across
+# five games; it is not the gate, and the report will say so.
+#
+# buildMin 8 only. Three minutes was measured as below the floor: five of ten
+# 3-minute cells left no policy at all, while no 8-minute cell did. Spending
+# half a study re-establishing a known dead floor buys nothing.
+profile.opus   harness=./harnesses/claude-code author=./harnesses/author-policy model=claude-opus-5   buildMin=8 transport=persistent
+profile.sonnet harness=./harnesses/claude-code author=./harnesses/author-policy model=claude-sonnet-5 buildMin=8 transport=persistent
+
+game.ice adapter=gymnasium target=FrozenLake-v1
+objective.goal goal=maximize:steps horizon=200 budgetUsd=4
+protocol.det frameskip=1 sticky=0 seeds=1 seed0=3
+sensor.ascii pixels=off channels=-
+
+reps 5
