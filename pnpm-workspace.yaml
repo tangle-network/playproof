@@ -3,5 +3,7 @@ packages:
 
 allowBuilds:
   esbuild: true
+minimumReleaseAgeExclude:
+  - '@tangle-network/agent-eval@0.181.0'
 overrides:
   esbuild: ">=0.28.1"
