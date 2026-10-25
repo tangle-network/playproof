@@ -56,7 +56,7 @@ The workflow is idempotent: retrying an already-published version verifies the a
 
 `publish.yml` calls the retained six-job qualification directly after `verify` resolves the tag: framework/package, free-ROM PyBoy, Gymnasium, ALE, Stable Retro, and RetroArch. Their work steps, toolchains, timeouts and runner placement are unchanged. Each checkout binds to the verified full source SHA; a manual standalone `ci` run uses its dispatched SHA. Qualification receives read-only repository access and no npm publication secret.
 
-The package writer still needs both `verify` and `require-green-ci`. A failed, cancelled, timed-out or skipped required job prevents the writer from running. Publication no longer waits for a separate branch-triggered `ci` run or polls the Actions API. The existing six-job names and work steps remain the source contract recorded by `release-gate.mts` and its retained assertions; that standalone polling helper is no longer invoked by publication.
+The package writer still needs both `verify` and `require-green-ci`. A failed, cancelled, timed-out or skipped required job prevents the writer from running. Publication no longer waits for a separate branch-triggered `ci` run or polls the Actions API. The existing `release-gate.mts` contract names five mandatory gates and quarantines RetroArch. This reroute retains all six job definitions and their existing work steps, including RetroArch's optional asset installation and conditional adapter check; it does not turn that quarantined adapter into mandatory proof. The standalone polling helper and its assertions remain in the source but are no longer invoked by publication.
 
 ### Retry a release
 
