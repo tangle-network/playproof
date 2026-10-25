@@ -13,13 +13,13 @@ Playproof publishes one verified archive to npm and attaches the same archive an
 
 ## Release gates
 
+Merge `origin/main` and qualify the affected surface before merging source changes. The maintained admitted release-equivalent reference is:
+
 ```bash
-corepack enable
-corepack prepare pnpm@11.17.0 --activate
-pnpm install --frozen-lockfile
-python -m compileall -q desktop native pyboy
-pnpm ci
+beelink-gate auto https://github.com/tangle-network/playproof.git <full-sha> -- bash -lc 'python3 -m compileall -q ale desktop gym native pyboy pyshared retro retroarch && pnpm ci'
 ```
+
+Workflow and documentation-only changes use actionlint, YAML, content, and exact-source structural checks. Automatic PR/main-push qualification is retired; the same six-job population runs within publication before the writer receives authority.
 
 `pnpm ci` runs:
 
@@ -33,12 +33,12 @@ pnpm ci
 
 The real PyBoy/Tetris regression (`PLAYPROOF_ROM=... pnpm test:pyboy` followed by `pnpm exec tsx calibrate.mts`) runs locally with a legally obtained ROM that matches `pyboy/reference-tetris.json`; CI cannot obtain that ROM, so the release manager runs it before tagging.
 
-The equivalent free-ROM regression (`pnpm test:pyboy-libbet`) runs in CI on every pull request, because the Libbet and the Magic Floor ROM is free software that the job downloads and verifies by hash.
+The equivalent free-ROM regression (`pnpm test:pyboy-libbet`) runs in the publication-owned qualification, because the Libbet and the Magic Floor ROM is free software that the job downloads and verifies by hash.
 
 ## Cut a release
 
 1. Update `package.json` and `CHANGELOG.md` in one pull request.
-2. Merge only after all required checks are green.
+2. Merge after the admitted local gate and all applicable review findings are resolved.
 3. Tag the exact tip of `main`:
 
    ```bash
@@ -46,32 +46,21 @@ The equivalent free-ROM regression (`pnpm test:pyboy-libbet`) runs in CI on ever
    git push origin v0.1.0
    ```
 
-4. The `require-green-ci` job resolves the commit the tag points at and reads the `ci` workflow result for that commit. The release continues only when `ci` concluded `success` there and all six required jobs ran and passed.
-5. The `verify` job rebuilds and verifies the source, creates one tarball, records its SHA-256, and uploads it as an ephemeral workflow artifact.
+4. The `verify` job resolves and validates the tag and package version, rebuilds and verifies that exact source, creates one tarball, records its SHA-256, and uploads it as an ephemeral workflow artifact.
+5. The `require-green-ci` job calls the retained `ci.yml` with the full source SHA from `verify`. All six jobs check out that SHA and must succeed before publication.
 6. The publish job publishes that exact file and creates the immutable GitHub release with the same tarball and `SHA256SUMS`.
 
 The workflow is idempotent: retrying an already-published version verifies the artifact identity and skips the npm mutation.
 
-## The ci result gates the tag
+## Qualification belongs to publication
 
-`publish.yml` never publishes a commit that `ci` has not passed. The gate refuses on every answer except a green one:
+`publish.yml` calls the retained six-job qualification directly after `verify` resolves the tag: framework/package, free-ROM PyBoy, Gymnasium, ALE, Stable Retro, and RetroArch. Their work steps, toolchains, timeouts and runner placement are unchanged. Each checkout binds to the verified full source SHA; a manual standalone `ci` run uses its dispatched SHA. Qualification receives read-only repository access and no npm publication secret.
 
-| what the Actions API reports for the tagged commit | outcome |
-|---|---|
-| the `ci` workflow concluded `success`, and all six required jobs passed | publish |
-| the `ci` workflow concluded `failure`, `cancelled`, `timed_out`, `neutral`, `skipped`, `stale` or `action_required` | refuse |
-| no `ci` run exists for that commit | wait up to 10 minutes, then refuse |
-| a `ci` run is still queued or running | wait up to 60 minutes, then refuse |
-| a run is green but a required job is absent, or its gate step was skipped | refuse |
-| the API cannot be read | refuse |
+The package writer still needs both `verify` and `require-green-ci`. A failed, cancelled, timed-out or skipped required job prevents the writer from running. Publication no longer waits for a separate branch-triggered `ci` run or polls the Actions API. The existing six-job names and work steps remain the source contract recorded by `release-gate.mts` and its retained assertions; that standalone polling helper is no longer invoked by publication.
 
-The six required job names live in `release-gate.mts` rather than being read from the tagged `ci.yml`, because a workflow file edited to remove a job would otherwise agree with itself. `release-gate.test.mts` fails when a name stops matching `ci.yml`, and states every refusal above as an executable case.
+### Retry a release
 
-### Retry a release, and override a red ci
-
-Run the `publish` workflow manually with `release_tag` set to the existing tag. The retry reads the `ci` result the same way a tag push does; it is not a way around the gate.
-
-To publish although `ci` is not green, set `ci_override_reason` on the same manual run to at least 12 characters that say why. The run reports that it published on a human override, and the reason is recorded in the workflow log and the job summary. There is no override on a tag push.
+Run the `publish` workflow manually with `release_tag` set to the existing tag. The retry validates its identity and runs the same source-bound qualification. There is no CI override input.
 
 ## Release integrity without provenance
 
