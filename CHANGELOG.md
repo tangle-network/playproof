@@ -2,6 +2,14 @@
 
 All notable changes to Playproof are documented here.
 
+## 1.0.0
+
+Playproof graduates to 1.0.0 at its next release, per agent-runtime release-versioning rule 4. This release carries the work merged since 0.10.0.
+
+- Matrix runner: the definition states its vocabulary and two games can have two clocks (#44); a run keeps everything it measured, not only its headline (#45); a practice board that cannot exist degrades instead of blocking (#46).
+- Drivers: an error path with nothing listening on it is handled in the cli, persistent-cli and stream-sandbox drivers (#43).
+- Publication: tagged source is qualified within publication (#48); open Dependabot alerts are resolved and the esbuild override moved to pnpm-workspace.yaml for pnpm 11.
+
 ## 0.10.0
 
 ### An arena: many profiles, many games, one definition
